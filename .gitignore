@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local agent / assistant instructions (not for the public repo)
+CLAUDE.md
+
+# Test artifacts
+test-results/
+playwright-report/
+cypress/screenshots/
+cypress/videos/
