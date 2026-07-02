@@ -145,20 +145,7 @@ It opens a local web UI where you can:
 
 # Architecture
 
-```text
-                 AI Assistant
-                       │
-                       ▼
-               QA MCP Server
-      ┌──────────┼──────────┐
-      │          │          │
-    Tools     Resources   Prompts
-      │          │          │
-      ▼          ▼          ▼
- Playwright   QA Knowledge  QA Workflows
- Cypress      Documentation
- Reports
-```
+![Agentic direction for qa-mcp-server](docs/assets/agentic-direction.svg)
 
 The server acts as a controlled bridge between an AI assistant and the Quality Engineering ecosystem.
 
