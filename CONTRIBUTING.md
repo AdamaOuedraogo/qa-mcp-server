@@ -13,6 +13,34 @@ Please read [`docs/vision.md`](docs/vision.md) first. The guiding rule is:
 We prefer a small, clean, safe foundation over a large, speculative one. If a
 change adds surface area, it should also carry its weight in usefulness.
 
+## Contribution Principles
+
+When contributing to this project, please keep these principles in mind.
+
+### Capabilities first
+
+We build small, focused Quality Engineering capabilities before building larger abstractions.
+
+Avoid introducing frameworks or orchestration layers until repeated patterns emerge.
+
+### Safety before convenience
+
+A feature that is easier but less secure is not considered an improvement.
+
+Every capability should preserve the project's security model.
+
+### Build before abstraction
+
+We prefer solving real problems before introducing reusable abstractions.
+
+Patterns should emerge from experience, not speculation.
+
+### Documentation is part of the implementation
+
+Every significant architectural decision should be documented.
+
+Code and documentation evolve together.
+
 ## Getting started
 
 ```bash
@@ -55,6 +83,18 @@ pattern each capability follows.
 - Validate tool/prompt inputs with `zod`.
 - Keep modules small and single-purpose.
 - Match the tone and structure of the existing code.
+
+## How we evaluate contributions
+
+Before opening a pull request, ask yourself:
+
+- Does this solve a real Quality Engineering problem?
+- Does it improve safety?
+- Does it improve maintainability?
+- Does it keep the project simple?
+- Does it align with the project's vision?
+
+If the answer is "no" to all of these questions, the contribution probably belongs elsewhere.
 
 ## Pull requests
 

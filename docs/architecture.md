@@ -69,6 +69,83 @@ rather than executing it, keeping the server safe to connect anywhere by
 default. The runner exists so enabling real execution later is a small,
 reviewable change.
 
+## Execution pipeline
+
+A tool request flows through a fixed sequence of stages:
+
+```text
+LLM tool call
+     │
+     ▼
+1. Transport        JSON-RPC over stdio → McpServer
+2. Validation       zod parses arguments; malformed input is rejected here
+3. Sanitization     sanitizeArg() strips control characters from values
+4. Handler          the tool's own logic builds the argument list
+5. Security boundary allowlist + no-shell (runCommand); not crossed in dry run
+6. Execution        dry run today (command is described, not run);
+                    real execution in a future version
+7. Response         structured content returned to the client
+```
+
+Each stage has a single responsibility, so a failure is easy to locate: a bad
+argument is caught at validation, a suspicious value is neutralised at
+sanitization, and no handler can reach a process without passing the security
+boundary.
+
+## Security model
+
+The server treats **every tool input as untrusted** — it originates from an LLM,
+which may itself be relaying untrusted content.
+
+- **No generic terminal.** There is no tool that runs arbitrary commands. Each
+  tool exposes a narrow, typed action.
+- **Validation.** Inputs are described and parsed with `zod`; anything that does
+  not match the schema is rejected before the handler runs.
+- **Sanitization.** `sanitizeArg()` strips control characters (e.g. `\r`, `\n`)
+  from argument values so they cannot corrupt a rendered command or smuggle in
+  hidden content.
+- **No shell.** When a process is run, `runCommand` passes arguments as an array
+  with `shell: false` against an allowlist — there is no string interpolation to
+  exploit.
+- **Dry run by default.** The run tools do not execute anything in the MVP, so
+  connecting the server has no side effects.
+
+Real execution, when added, must not weaken these properties: it should sit
+behind an explicit security boundary rather than being wired directly into a
+handler.
+
+## Future execution model
+
+Enabling real Playwright/Cypress runs should be an additive, reviewable change,
+not a rewrite. The intended shape:
+
+- **Execution adapter.** Handlers do not spawn processes directly. They hand a
+  validated, sanitized request to an adapter that owns process execution via
+  `runCommand`. This keeps the security boundary in one auditable place.
+- **Opt-in.** Real execution is disabled unless explicitly enabled (e.g. a
+  config flag / environment variable), so the safe behaviour remains the
+  default.
+- **Isolation when appropriate.** For untrusted or higher-risk runs, the adapter
+  may execute inside an isolated environment — a container (such as Docker) or
+  another sandbox. This is *one possible implementation*, not the goal itself;
+  the requirement is isolation, and the mechanism can vary.
+
+The vision is the boundary and the opt-in, not any specific sandbox technology.
+
+## Extension model
+
+Adding a capability follows the same **one file + one register function**
+pattern everywhere:
+
+1. Create a file in `src/tools/`, `src/resources/`, or `src/prompts/`.
+2. Export a `register<Name>(server)` function that declares the capability
+   (name, description, `zod` schema where applicable, and a handler).
+3. For tools that take free-form values, run them through `sanitizeArg()`.
+4. Register it with a single call in `src/server.ts`.
+
+No other file needs to change. The composition root stays declarative, and each
+capability remains independently readable, reviewable, and testable.
+
 ## Design decisions
 
 - **One capability per file.** Predictable, reviewable, easy to test.

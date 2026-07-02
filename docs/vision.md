@@ -1,50 +1,180 @@
 # Vision
 
-## What this is
+## Why this project exists
 
-`qa-mcp-server` is an open source [Model Context Protocol](https://modelcontextprotocol.io)
-server dedicated to **Quality Engineering**. It gives AI agents a small, safe,
-and well-typed surface to interact with real QA workflows: running tests,
-reading reports, and reasoning about test design and failures.
+Software engineering is entering a new era.
 
-## Why MCP for QA
+AI assistants are rapidly becoming capable of generating code, reviewing pull requests, explaining bugs and helping developers throughout the software development lifecycle.
 
-MCP is a standard way for AI applications to connect to tools, data, and
-reusable prompts. Instead of every assistant re-inventing ad-hoc integrations,
-an MCP server exposes capabilities once and any MCP-compatible client can use
-them.
+Quality Engineering is naturally the next discipline to benefit from this evolution.
 
-Quality Engineering is a strong fit:
+However, today's AI integrations often rely on a generic terminal to interact with testing environments.
 
-- QA work is full of **structured, repeatable actions** (run a suite, read a
-  report, triage a failure) — good candidates for well-defined tools.
-- QA depends on **shared conventions and knowledge** (test strategy, framework
-  guidelines) — good candidates for resources.
-- QA has **recurring reasoning tasks** (generate a test, analyze a failure) —
-  good candidates for reusable prompts.
+While powerful, a terminal exposes far more capabilities than a Quality Engineering workflow actually requires.
 
-## Agentic Quality Engineering
+This project explores a different approach.
 
-Agentic Quality Engineering is the practice of letting AI agents participate in
-the testing loop — proposing tests, running them, reading the results, and
-suggesting fixes — under **human oversight and safe, controlled tools**.
+Instead of giving AI assistants unrestricted access to a machine, we believe they should receive carefully designed Quality Engineering capabilities.
 
-The emphasis is on *controlled*. An agent should not have a generic terminal.
-It should have narrow, auditable tools like `run_playwright_test` whose inputs
-are typed and whose behaviour is predictable.
+The goal is not to make AI more powerful.
 
-## Principles
+The goal is to make AI more useful.
 
-- **Start small, stay clean.** A minimal foundation that is easy to extend.
-- **Safety first.** No arbitrary shell execution. Allowlisted, bounded actions.
-- **Separation of concerns.** Each tool, resource, and prompt in its own file;
-  the server only wires them together.
-- **Build → learn → document → publish.** Ship what is actually built.
+---
 
-## Non-goals (for now)
+# Vision
 
-- No full autonomous agent.
-- No RAG.
-- No large platform or web UI.
+We believe AI agents will become valuable collaborators for Quality Engineers.
 
-These may come later — see the [roadmap](../ROADMAP.md).
+To reach that future, they need interfaces designed specifically for testing.
+
+Not operating system privileges.
+
+Not unrestricted shell access.
+
+But focused capabilities such as:
+
+* running automated tests;
+* reading reports;
+* analyzing failures;
+* understanding testing strategies;
+* accessing business rules;
+* generating high-quality test cases;
+* helping engineers investigate software quality.
+
+QA MCP Server exists to explore what those capabilities should look like.
+
+---
+
+# Design Philosophy
+
+Every capability exposed by this project should follow a few simple principles.
+
+## Purpose-built capabilities
+
+Expose Quality Engineering capabilities instead of generic system access.
+
+A capability should solve a real QA problem.
+
+---
+
+## Safe by default
+
+The safest behavior should always be the default behavior.
+
+Potentially dangerous operations should require explicit design decisions and validation.
+
+---
+
+## Secure execution
+
+AI capabilities should execute in the smallest, safest environment possible.
+
+Potentially dangerous operations should be isolated from the host system whenever appropriate.
+
+Security should be part of the architecture, not an afterthought.
+
+---
+
+## Small composable building blocks
+
+Each Tool, Resource and Prompt should remain small, focused and reusable.
+
+Complex workflows should emerge from combining simple capabilities rather than creating monolithic tools.
+
+---
+
+## Documentation before complexity
+
+Architecture decisions should be documented before the project becomes difficult to understand.
+
+Good documentation is considered part of the implementation.
+
+---
+
+## AI-friendly interfaces
+
+Everything exposed by this project should be understandable by both humans and AI assistants.
+
+Clarity is more valuable than cleverness.
+
+---
+
+# What this project is
+
+QA MCP Server is:
+
+* an open-source MCP server;
+* a collection of Quality Engineering capabilities;
+* a reference implementation for AI-assisted testing;
+* a learning laboratory for Agentic Quality Engineering.
+
+---
+
+# What this project is not
+
+This project is not:
+
+* another AI coding assistant;
+* another Playwright framework;
+* another testing framework;
+* a generic terminal wrapper;
+* an autonomous QA platform.
+
+The objective is not to replace Quality Engineers.
+
+The objective is to augment them.
+
+---
+
+# Long-term direction
+
+The project will evolve incrementally.
+
+Each new capability should answer a real problem encountered by Quality Engineers.
+
+Future iterations may include:
+
+* Playwright execution
+* Cypress execution
+* API testing
+* trace analysis
+* report analysis
+* Jira integration
+* GitHub integration
+* Slack integration
+* Quality knowledge resources
+* RAG-powered documentation
+* reference QA agents built on top of this server
+
+Technology choices may evolve over time.
+
+The vision should not.
+
+---
+
+# Decision rule
+
+Every proposed feature should answer "yes" to at least one of these questions:
+
+* Does it make AI assistants more useful for Quality Engineers?
+* Does it improve safety?
+* Does it improve clarity?
+* Does it improve maintainability?
+* Does it solve a real testing problem?
+
+If the answer is "no" to all of them, it probably does not belong in this project.
+
+---
+
+# Agentic Quality Lab
+
+QA MCP Server is the first project developed as part of **Agentic Quality Lab**.
+
+Agentic Quality Lab is a long-term initiative dedicated to exploring how AI agents can transform Quality Engineering through practical experimentation, open-source software and transparent engineering.
+
+The philosophy remains simple:
+
+**Build → Learn → Share**
+
+Every feature implemented in this repository is an opportunity to learn, document architectural decisions and share real engineering experience with the community.

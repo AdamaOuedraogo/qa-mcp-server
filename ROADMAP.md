@@ -4,6 +4,19 @@ This project follows a simple philosophy: **build → learn what is needed →
 document → publish what was actually built.** The roadmap is a direction, not a
 promise. Scope is kept deliberately small.
 
+## Completed milestones
+
+What is already in place as of v0.1:
+
+- Foundation project created
+- Official MCP SDK
+- TypeScript + Node.js + pnpm
+- Controlled QA tools (`run_playwright_test`, `run_cypress_test`, `read_test_report`)
+- Resources (`qa://test-strategy`, `qa://playwright-guidelines`)
+- Prompts (`generate-playwright-test`, `analyze-test-failure`)
+- Safe command-execution utility (allowlist, no shell, timeout, output cap)
+- Documentation (README, Vision, Architecture, Contributing)
+
 ## v0.1 — Foundation (current)
 
 The clean, extensible MVP.
@@ -39,6 +52,29 @@ Only if they prove genuinely useful.
 - [ ] Additional frameworks (Vitest, Jest, k6)
 - [ ] Trace/screenshot ingestion for `analyze-test-failure`
 - [ ] Optional agent workflows on top of the tools
+
+## Long-term vision
+
+This repository focuses on building QA **capabilities**: small, safe, composable
+tools, resources, and prompts.
+
+Longer term, those capabilities could serve as the foundation that higher-level
+AI systems build on. Possible directions include:
+
+- Multi-agent QA systems
+- LangGraph workflows
+- CrewAI workflows
+- Reference QA agents
+- SDKs built on top of the server
+- Reusable QA capability libraries
+
+These are **not planned features**. They are directions that would only make
+sense if real adoption and real needs pull the project there. The guiding rule
+stays the same:
+
+> **Capabilities first. Frameworks later.**
+
+The current priority is unchanged: build small, safe, composable QA capabilities.
 
 ## Explicit non-goals for now
 

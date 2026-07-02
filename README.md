@@ -1,62 +1,116 @@
-# qa-mcp-server
+# QA MCP Server
 
-A small, safe [Model Context Protocol (MCP)](https://modelcontextprotocol.io)
-server for **Quality Engineering**. It gives an AI assistant a few narrow,
-typed tools to work with QA workflows — Playwright, Cypress, and test reports —
-**without ever handing it a shell**.
+> **Don't give an AI a terminal. Give it QA capabilities.**
 
-> Status: **v0.1 — foundation.** A clean, extensible MVP. See the [roadmap](ROADMAP.md).
+`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that gives AI assistants safe, structured access to Quality Engineering workflows.
 
-## Why this exists
+Instead of exposing a generic terminal, it exposes purpose-built QA capabilities such as Playwright execution, Cypress execution, test reports, testing guidelines and reusable QA prompts.
 
-AI assistants are increasingly asked to help with testing: writing specs,
-running suites, reading failures. Doing that usually means giving the model a
-generic terminal — which is powerful and unsafe.
+The objective is simple:
 
-This server takes the opposite approach. It exposes QA capabilities as
-**controlled tools** with typed inputs, so an assistant can help with testing
-through a small, predictable, auditable surface instead of arbitrary commands.
+> Help AI agents become better Quality Engineers without giving them unrestricted access to your machine.
 
-## What it exposes
+---
 
-**Tools**
+## Contents
 
-| Tool | What it does | Inputs |
-| --- | --- | --- |
-| `run_playwright_test` | Builds the Playwright command that would run. | `testPath?`, `headed?`, `project?` |
-| `run_cypress_test` | Builds the Cypress command that would run. | `spec?`, `browser?` |
-| `read_test_report` | Reads a report file from disk, size-capped. | `reportPath?` |
+* [Why this project exists](#why-this-project-exists)
+* [Current MVP](#current-mvp)
+* [Getting Started](#getting-started)
+* [Architecture](#architecture)
+* [Why not a Terminal?](#why-not-a-terminal)
+* [Core Design Principles](#core-design-principles)
+* [Roadmap](#roadmap)
+* [Vision](#vision)
+* [Contributing](#contributing)
+* [Documentation](#documentation)
+* [License](#license)
 
-**Resources**
+---
 
-- `qa://test-strategy` — a pragmatic, layered test strategy (Markdown).
-- `qa://playwright-guidelines` — conventions for reliable Playwright tests.
+# Why this project exists
 
-**Prompts**
+AI assistants are becoming increasingly capable of helping software teams.
 
-- `generate-playwright-test` — turn a user story + conventions into a spec.
-- `analyze-test-failure` — triage a failure from report, trace, and logs.
+They can generate code.
 
-## Safe by design
+They can review pull requests.
 
-This is a deliberate MVP, not a limitation to work around:
+They can explain failures.
 
-- **No generic terminal.** There is no "run any command" tool.
-- **Dry-run by default.** `run_playwright_test` and `run_cypress_test` return
-  the exact command they *would* run — they do not execute anything. That makes
-  the server safe to connect anywhere. Real execution is planned as an explicit
-  opt-in (see the [roadmap](ROADMAP.md)).
-- **No shell, ever.** The command utility runs binaries with an argument array
-  and `shell: false`, against an allowlist (`npx`, `pnpm`, `node`).
-- **Sanitized inputs.** Control characters are stripped from tool arguments.
-- **Bounded reads.** `read_test_report` truncates large files.
+The next logical step is helping engineers with software quality.
 
-## Install & run
+Unfortunately, most AI integrations achieve this by exposing a generic terminal.
+
+While powerful, a terminal gives an AI access to far more than it actually needs.
+
+Quality Engineering doesn't require unlimited power.
+
+It requires well-designed capabilities.
+
+This project follows a different philosophy.
+
+Instead of exposing a shell, it exposes QA-specific tools that are:
+
+* typed
+* predictable
+* auditable
+* intentionally limited
+* safe by default
+
+The goal is not to let an AI do everything.
+
+The goal is to let it do the right things.
+
+---
+
+# Current MVP
+
+## Tools
+
+| Tool                | Purpose                        | Status                                          |
+| ------------------- | ------------------------------ | ----------------------------------------------- |
+| run_playwright_test | Prepare a Playwright test run  | **Dry-run** — returns the command, does not run it |
+| run_cypress_test    | Prepare a Cypress test run     | **Dry-run** — returns the command, does not run it |
+| read_test_report    | Read a test report file safely | Active — reads from disk, size-capped           |
+
+> **Dry-run by design.** The run tools return the exact command they *would*
+> execute, without executing anything. This is intentional and safe by default,
+> so the server is safe to connect anywhere. Real execution is planned for v0.2.
+
+---
+
+## Resources
+
+| Resource                   | Purpose                   |
+| -------------------------- | ------------------------- |
+| qa://test-strategy         | Testing strategy          |
+| qa://playwright-guidelines | Playwright best practices |
+
+---
+
+## Prompts
+
+| Prompt                   | Purpose                                        |
+| ------------------------ | ---------------------------------------------- |
+| generate-playwright-test | Generate Playwright tests from requirements    |
+| analyze-test-failure     | Analyze test failures using available evidence |
+
+---
+
+# Getting Started
 
 Requirements: **Node.js ≥ 18** and **pnpm**.
 
+## Install
+
 ```bash
 pnpm install
+```
+
+## Run
+
+```bash
 pnpm dev        # run over stdio (via tsx, no build step)
 ```
 
@@ -80,33 +134,166 @@ pnpm build
 npx @modelcontextprotocol/inspector node dist/index.js
 ```
 
-It opens a local web UI. From there you can:
+It opens a local web UI where you can:
 
 1. **Tools** → call `run_playwright_test` with e.g. `testPath: "tests/login.spec.ts"`,
    `project: "chromium"`, `headed: true`, and see the command it would run.
 2. **Resources** → read `qa://test-strategy` and `qa://playwright-guidelines`.
 3. **Prompts** → render `generate-playwright-test` with a sample user story.
 
-## Connect to an MCP client
+---
 
-Most clients launch a local server as a subprocess. Point yours at the built
-entry point after `pnpm build`:
+# Architecture
 
-```json
-{
-  "mcpServers": {
-    "qa": {
-      "command": "node",
-      "args": ["/absolute/path/to/qa-mcp-server/dist/index.js"]
-    }
-  }
-}
+```text
+                 AI Assistant
+                       │
+                       ▼
+               QA MCP Server
+      ┌──────────┼──────────┐
+      │          │          │
+    Tools     Resources   Prompts
+      │          │          │
+      ▼          ▼          ▼
+ Playwright   QA Knowledge  QA Workflows
+ Cypress      Documentation
+ Reports
 ```
 
-## Docs
+The server acts as a controlled bridge between an AI assistant and the Quality Engineering ecosystem.
 
-- [Vision](docs/vision.md) · [Architecture](docs/architecture.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
+---
 
-## License
+# Why not a Terminal?
 
-[MIT](LICENSE) © 2026 Adama Ouedraogo
+A terminal is extremely flexible.
+
+It is also extremely difficult to secure.
+
+This project intentionally avoids exposing arbitrary shell access.
+
+Instead, every capability is explicitly designed, reviewed and documented.
+
+This makes AI behaviour:
+
+* easier to understand;
+* easier to audit;
+* easier to secure;
+* easier to extend.
+
+---
+
+# Core Design Principles
+
+## Purpose-built capabilities
+
+An AI assistant should receive dedicated Quality Engineering capabilities instead of unrestricted operating system access.
+
+## Safe by default
+
+Potentially dangerous operations should require explicit design and validation.
+
+The safest behaviour should always be the default behaviour.
+
+## Small building blocks
+
+Each Tool, Resource and Prompt should remain independent, understandable and easy to extend.
+
+## Documentation first
+
+Architecture decisions should be documented before features become complex.
+
+## AI-friendly interfaces
+
+Everything exposed by this server should be designed for both humans and AI assistants.
+
+---
+
+# Roadmap
+
+The project will evolve incrementally.
+
+## v0.1
+
+* Foundation
+* Project architecture
+* First QA tools
+* First QA resources
+* First QA prompts
+
+## v0.2
+
+* Real Playwright execution
+* Trace reader
+* HTML report reader
+
+## v0.3
+
+* Jira integration
+* GitHub integration
+* Slack notifications
+
+## Future
+
+As the project grows, additional capabilities may include:
+
+* RAG-powered QA knowledge
+* richer testing resources
+* advanced failure analysis
+* reference QA agents built on top of this server
+
+The focus, however, will always remain the same:
+
+Build useful Quality Engineering capabilities for AI assistants.
+
+---
+
+# Vision
+
+QA is becoming one of the first engineering disciplines where AI agents can provide immediate value.
+
+This project explores how AI assistants can safely interact with testing ecosystems through purpose-built capabilities rather than unrestricted system access.
+
+This project is part of a larger learning journey called **Agentic Quality Lab**.
+
+The idea is simple:
+
+Build a real project.
+
+Learn only what is necessary to move it forward.
+
+Share what was actually built.
+
+Every new concept—MCP, RAG, memory, evaluation, AI agents—will first be implemented inside this project before being documented publicly.
+
+The repository therefore serves two purposes:
+
+* a useful open-source MCP server for Quality Engineering;
+* a living laboratory for exploring Agentic Quality Engineering.
+
+→ Read the full [Vision document](docs/vision.md).
+
+---
+
+# Contributing
+
+Contributions are welcome.
+
+If you have ideas for QA workflows that could help AI assistants become better Quality Engineers, feel free to open an issue or submit a pull request.
+
+---
+
+# Documentation
+
+More detail lives in the dedicated documents:
+
+* [Vision](docs/vision.md) — project philosophy and Agentic Quality Engineering
+* [Architecture](docs/architecture.md) — how tools, resources and prompts are wired
+* [Roadmap](ROADMAP.md) — planned evolution and non-goals
+* [Contributing](CONTRIBUTING.md) — how to propose QA workflows and changes
+
+---
+
+# License
+
+MIT © 2026 Adama Ouedraogo
