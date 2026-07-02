@@ -1,14 +1,17 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { sanitizeArg } from "../utils/command.js";
+import { getExecutionConfig, isLiveExecutionEnabled } from "../config.js";
+import { ExecutionError, renderRunResult, runInProject } from "../execution/adapter.js";
 
 /**
  * Tool: run_playwright_test
  *
  * A *controlled* tool (not a generic terminal). It accepts a small, typed set
- * of QA-relevant parameters and describes the exact Playwright command that
- * would run. Actual execution is intentionally left as an opt-in follow-up so
- * the MVP stays safe by default.
+ * of QA-relevant parameters. By default it is a dry run (returns the exact
+ * Playwright command). When live execution is enabled via configuration, it
+ * runs Playwright inside the configured project directory through the execution
+ * adapter (the single security boundary).
  */
 export function registerRunPlaywrightTest(server: McpServer): void {
   server.registerTool(
@@ -16,9 +19,9 @@ export function registerRunPlaywrightTest(server: McpServer): void {
     {
       title: "Run Playwright Test",
       description:
-        "Prepare a Playwright test run from safe, typed parameters. Returns the " +
-        "exact command that would be executed. This is a controlled tool — it " +
-        "does not accept arbitrary shell input.",
+        "Run a Playwright test from safe, typed parameters. Dry-run by default " +
+        "(returns the exact command); executes for real only when live " +
+        "execution is enabled. Controlled tool — no arbitrary shell input.",
       inputSchema: {
         testPath: z
           .string()
@@ -47,24 +50,41 @@ export function registerRunPlaywrightTest(server: McpServer): void {
 
       const command = `npx ${args.join(" ")}`;
 
-      const summary = [
-        "Prepared Playwright run (dry run — not executed).",
-        "",
-        `Command: ${command}`,
-        "",
-        "Parameters:",
-        `- testPath: ${safeTestPath ?? "(all tests)"}`,
-        `- project:  ${safeProject ?? "(default projects)"}`,
-        `- headed:   ${headed ? "yes" : "no"}`,
-        "",
-        "To execute this for real, run the command above in the project that " +
-          "has Playwright installed. Execution is disabled by default in this " +
-          "MVP so the server is safe to connect to any client.",
-      ].join("\n");
+      // Dry-run (default): describe the command without executing anything.
+      if (!isLiveExecutionEnabled()) {
+        const summary = [
+          "Prepared Playwright run (dry run — not executed).",
+          "",
+          `Command: ${command}`,
+          "",
+          "Parameters:",
+          `- testPath: ${safeTestPath ?? "(all tests)"}`,
+          `- project:  ${safeProject ?? "(default projects)"}`,
+          `- headed:   ${headed ? "yes" : "no"}`,
+          "",
+          "Live execution is disabled. To enable it, set QA_MCP_EXECUTION_MODE=live " +
+            "and QA_MCP_PROJECT_DIR to the absolute path of a Playwright project.",
+        ].join("\n");
 
-      return {
-        content: [{ type: "text", text: summary }],
-      };
+        return { content: [{ type: "text", text: summary }] };
+      }
+
+      // Live: run through the execution adapter (security boundary).
+      const { projectDir } = getExecutionConfig();
+      try {
+        const result = await runInProject(args);
+        return {
+          content: [
+            { type: "text", text: renderRunResult("Playwright", command, projectDir!, result) },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof ExecutionError ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Playwright run could not start: ${message}` }],
+        };
+      }
     },
   );
 }

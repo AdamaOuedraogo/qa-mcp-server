@@ -33,8 +33,10 @@ The clean, extensible MVP.
 
 Turn the dry-run tools into safe, real runners.
 
-- [ ] Opt-in real execution behind an explicit config flag / env var
-- [ ] Working-directory restriction and project detection
+- [x] Opt-in real execution behind an explicit config flag / env var
+      (`QA_MCP_EXECUTION_MODE`, `QA_MCP_PROJECT_DIR`)
+- [x] Working-directory restriction (runs pinned to one configured project dir;
+      `..` path traversal rejected) via a dedicated execution adapter
 - [ ] Structured parsing of Playwright/Cypress results into typed output
 - [ ] Basic tests for the command utility and tool handlers
 

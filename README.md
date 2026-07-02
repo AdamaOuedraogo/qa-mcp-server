@@ -17,6 +17,7 @@ The objective is simple:
 * [Why this project exists](#why-this-project-exists)
 * [Current MVP](#current-mvp)
 * [Getting Started](#getting-started)
+* [Real execution (opt-in)](#real-execution-opt-in)
 * [Architecture](#architecture)
 * [Why not a Terminal?](#why-not-a-terminal)
 * [Core Design Principles](#core-design-principles)
@@ -74,9 +75,10 @@ The goal is to let it do the right things.
 | run_cypress_test    | Prepare a Cypress test run     | **Dry-run** — returns the command, does not run it |
 | read_test_report    | Read a test report file safely | Active — reads from disk, size-capped           |
 
-> **Dry-run by design.** The run tools return the exact command they *would*
-> execute, without executing anything. This is intentional and safe by default,
-> so the server is safe to connect anywhere. Real execution is planned for v0.2.
+> **Dry-run by design.** By default the run tools return the exact command they
+> *would* execute, without executing anything, so the server is safe to connect
+> anywhere. Real execution is available as an explicit opt-in — see
+> [Real execution](#real-execution-opt-in).
 
 ---
 
@@ -140,6 +142,45 @@ It opens a local web UI where you can:
    `project: "chromium"`, `headed: true`, and see the command it would run.
 2. **Resources** → read `qa://test-strategy` and `qa://playwright-guidelines`.
 3. **Prompts** → render `generate-playwright-test` with a sample user story.
+
+## Real execution (opt-in)
+
+By default the run tools are **dry-run** and execute nothing. Real execution is
+an explicit opt-in, controlled entirely by environment variables:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `QA_MCP_EXECUTION_MODE` | `dry-run` or `live` | `dry-run` |
+| `QA_MCP_PROJECT_DIR` | Absolute path of the **only** directory tests may run in | — |
+| `QA_MCP_EXEC_TIMEOUT_MS` | Max run time before the process is killed | `600000` |
+
+Live execution runs only when **both** `QA_MCP_EXECUTION_MODE=live` **and**
+`QA_MCP_PROJECT_DIR` are set. Runs are pinned to that directory, arguments
+containing `..` are rejected, and execution goes through a single
+[execution adapter](docs/architecture.md#future-execution-model) that reuses the
+allowlisted, no-shell command helper.
+
+Example MCP client config pointing at a real Cypress project:
+
+```json
+{
+  "mcpServers": {
+    "qa": {
+      "command": "node",
+      "args": ["/absolute/path/to/qa-mcp-server/dist/index.js"],
+      "env": {
+        "QA_MCP_EXECUTION_MODE": "live",
+        "QA_MCP_PROJECT_DIR": "/absolute/path/to/your/cypress-project"
+      }
+    }
+  }
+}
+```
+
+With this set, calling `run_cypress_test` with
+`spec: "cypress/e2e/user/login.spec.cy.ts"` actually runs
+`npx cypress run --spec ...` in the project and returns the run status, exit
+code, and captured output (including failures).
 
 ---
 
