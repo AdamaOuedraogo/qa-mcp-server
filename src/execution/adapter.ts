@@ -35,8 +35,13 @@ function assertNoPathTraversal(args: string[]): void {
  * Run an allowlisted test command inside the configured project directory.
  *
  * @param args Full argument list for `npx`, e.g. ["cypress", "run", "--spec", "..."].
+ * @param env  Extra environment variables (e.g. a resolved base URL). Passed to
+ *             the child as env, never interpolated into the command.
  */
-export async function runInProject(args: string[]): Promise<RunCommandResult> {
+export async function runInProject(
+  args: string[],
+  env?: Record<string, string>,
+): Promise<RunCommandResult> {
   const { mode, projectDir, timeoutMs } = getExecutionConfig();
 
   if (mode !== "live") {
@@ -72,6 +77,7 @@ export async function runInProject(args: string[]): Promise<RunCommandResult> {
     args,
     cwd: resolved,
     timeoutMs,
+    env,
   });
 }
 

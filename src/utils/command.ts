@@ -45,6 +45,12 @@ export interface RunCommandOptions {
   timeoutMs?: number;
   /** Max number of captured output characters before truncation. */
   maxOutputChars?: number;
+  /**
+   * Extra environment variables, merged over the inherited process env. Values
+   * are passed to the child as env (never interpolated into the command), so
+   * they cannot alter which binary or arguments run.
+   */
+  env?: Record<string, string>;
 }
 
 export interface RunCommandResult {
@@ -72,6 +78,7 @@ export function runCommand(options: RunCommandOptions): Promise<RunCommandResult
     cwd = process.cwd(),
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS,
+    env: extraEnv,
   } = options;
 
   if (!ALLOWED_COMMANDS.includes(command)) {
@@ -105,7 +112,7 @@ export function runCommand(options: RunCommandOptions): Promise<RunCommandResult
       cwd,
       // Never run through a shell: arguments cannot be reinterpreted.
       shell: false,
-      env: process.env,
+      env: { ...process.env, ...(extraEnv ?? {}) },
     });
 
     const timer = setTimeout(() => {

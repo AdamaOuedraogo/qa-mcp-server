@@ -153,6 +153,7 @@ an explicit opt-in, controlled entirely by environment variables:
 | `QA_MCP_EXECUTION_MODE` | `dry-run` or `live` | `dry-run` |
 | `QA_MCP_PROJECT_DIR` | Absolute path of the **only** directory tests may run in | — |
 | `QA_MCP_EXEC_TIMEOUT_MS` | Max run time before the process is killed | `600000` |
+| `QA_MCP_BASE_URL_LOCAL` / `_STAGING` / `_PREPROD` / `_PRODUCTION` | Base URL per target environment (see below) | — |
 
 Live execution runs only when **both** `QA_MCP_EXECUTION_MODE=live` **and**
 `QA_MCP_PROJECT_DIR` are set. Runs are pinned to that directory, arguments
@@ -181,6 +182,23 @@ With this set, calling `run_cypress_test` with
 `spec: "cypress/e2e/user/login.spec.cy.ts"` actually runs
 `npx cypress run --spec ...` in the project and returns the run status, exit
 code, and captured output (including failures).
+
+### Target environments
+
+Both run tools accept an optional `environment` — a **closed enum**:
+`local` | `staging` | `preprod` | `production`. The caller can *select* an
+environment but can never define what it points to:
+
+- The name maps to an operator-provided base URL (`QA_MCP_BASE_URL_<ENV>`),
+  injected as `CYPRESS_BASE_URL` / `PLAYWRIGHT_BASE_URL` — passed to the process
+  as an environment variable, never interpolated into the command string.
+- For Cypress, the name is also passed as `--env target=<environment>` so the
+  project can branch on it (`Cypress.env("target")`).
+- If no base URL is configured for that environment, the tool falls back to the
+  project's own defaults instead of guessing.
+
+Because `environment` is validated against the enum, arbitrary values (e.g. an
+injected URL or shell fragment) are rejected before the handler runs.
 
 ---
 
