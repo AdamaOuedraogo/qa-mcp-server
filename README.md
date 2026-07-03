@@ -2,11 +2,15 @@
 
 > **Don't give an AI a terminal. Give it QA capabilities.**
 
-`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that gives AI assistants safe, structured access to Quality Engineering workflows.
+`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that gives AI assistants safe, structured access to Quality Engineering work.
 
-Instead of exposing a generic terminal, it exposes purpose-built QA capabilities such as Playwright execution, Cypress execution, test reports, testing guidelines and reusable QA prompts.
+It starts with low-level, safe capabilities — running Playwright and Cypress, reading test reports, plus testing guidelines and reusable QA prompts. But Playwright and Cypress are execution details, not the center of the product. The first-class inputs of Quality Engineering are Jira tickets, merge requests, incidents, acceptance criteria, test strategy and business rules.
 
-The objective is simple:
+The long-term objective is to support real QA workflows built on those capabilities — not to replace QA engineers, but to model and augment their work.
+
+> **The long-term objective is not to expose testing tools. It is to expose Quality Engineering capabilities that mirror the real work of QA engineers.**
+
+Instead of exposing a generic terminal, the server exposes purpose-built, typed QA capabilities:
 
 > Help AI agents become better Quality Engineers without giving them unrestricted access to your machine.
 
@@ -66,6 +70,12 @@ The goal is to let it do the right things.
 ---
 
 # Current MVP
+
+The MVP is intentionally small: low-level, safe testing capabilities. Higher-level
+QA workflows such as `validate_ticket`, `review_merge_request` and
+`investigate_incident` are **long-term targets, not current features** — they will
+be built on top of smaller capabilities. See [Vision](#vision) and the
+[roadmap](ROADMAP.md).
 
 ## Tools
 

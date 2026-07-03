@@ -131,8 +131,16 @@ The objective is to augment them.
 
 qa-mcp-server is not just a wrapper around Cypress or Playwright.
 
+> The long-term objective is not to expose testing tools. It is to expose
+> Quality Engineering capabilities that mirror the real work of QA engineers.
+
+Playwright and Cypress are execution details, not the center of the product. The
+first-class inputs of Quality Engineering are Jira tickets, merge requests,
+incidents, acceptance criteria, test strategy and business rules.
+
 The low-level tools are building blocks. The long-term goal is to model real
-Quality Engineering workflows as capabilities an AI agent can use.
+Quality Engineering workflows as capabilities an AI agent can use — not to
+replace QA engineers, but to model and augment their work.
 
 We think in two layers.
 
@@ -181,8 +189,10 @@ Jira customer ticket, Datadog logs, customer context, reproduction steps,
 related incidents, existing bugs, and test reports. The output helps decide
 whether to open a bug for developers.
 
-These workflows are **not implemented yet**. They describe where the low-level
-capabilities are heading. Capabilities first, workflows later.
+`validate_ticket`, `review_merge_request` and `investigate_incident` are **not
+current MVP features**. They are long-term workflow targets built on top of
+smaller capabilities, and they describe where the low-level capabilities are
+heading. Capabilities first, workflows later.
 
 ---
 
