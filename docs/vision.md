@@ -127,6 +127,65 @@ The objective is to augment them.
 
 ---
 
+# From capabilities to workflows
+
+qa-mcp-server is not just a wrapper around Cypress or Playwright.
+
+The low-level tools are building blocks. The long-term goal is to model real
+Quality Engineering workflows as capabilities an AI agent can use.
+
+We think in two layers.
+
+## Layer 1 — Low-level QA capabilities
+
+Small, typed, safe MCP capabilities that each read or do one concrete thing,
+grouped by domain:
+
+* Jira — tickets, acceptance criteria, business context
+* GitLab — merge requests, pipelines
+* Testing — Playwright and Cypress runs
+* Knowledge — test strategy, business rules
+* Reports — test results and artifacts
+* Logs — Datadog and other observability
+
+Examples: `read_jira_ticket`, `read_merge_request`, `read_pipeline_status`,
+`run_playwright_test`, `run_cypress_test`, `read_test_report`,
+`read_datadog_logs`, `read_test_strategy`, `read_business_rules`.
+
+Today only a subset exists (the testing, reports and knowledge building blocks).
+The rest are direction, not implemented.
+
+## Layer 2 — QA workflows
+
+Higher-level workflows that combine many Layer 1 capabilities to model how a QA
+engineer actually works. They are modeled on real product QA practice.
+
+### validate_ticket()
+
+Decide whether a ticket can be marked "QA OK" before production. Consults the
+Jira ticket and acceptance criteria, the merge request, the CI pipeline and the
+P0 tests it already ran, the P1/P2 tests run on a staging or preview
+environment, and the regression risk.
+
+### review_merge_request()
+
+A QA-focused review of a merge request: is it testable, risky, missing coverage,
+or likely to break existing behavior? Inspects the MR description and code
+changes, the related Jira ticket, test changes, pipeline status, and the
+existing test strategy.
+
+### investigate_incident()
+
+Determine whether a customer-reported issue is a real product bug. May use the
+Jira customer ticket, Datadog logs, customer context, reproduction steps,
+related incidents, existing bugs, and test reports. The output helps decide
+whether to open a bug for developers.
+
+These workflows are **not implemented yet**. They describe where the low-level
+capabilities are heading. Capabilities first, workflows later.
+
+---
+
 # Long-term direction
 
 The project will evolve incrementally.

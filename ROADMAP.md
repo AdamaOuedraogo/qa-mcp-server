@@ -55,6 +55,31 @@ Only if they prove genuinely useful.
 - [ ] Trace/screenshot ingestion for `analyze-test-failure`
 - [ ] Optional agent workflows on top of the tools
 
+## Two layers: capabilities and workflows
+
+A direction for how the pieces fit together — not a commitment to dates. See
+[docs/vision.md](docs/vision.md) and [docs/architecture.md](docs/architecture.md).
+
+**Layer 1 — low-level QA capabilities** (MCP tools/resources), grouped by
+domain. Some exist; most are future:
+
+- Jira — `read_jira_ticket` (acceptance criteria, business context)
+- GitLab — `read_merge_request`, `read_pipeline_status`
+- Testing — `run_playwright_test`, `run_cypress_test` — done
+- Knowledge — `read_test_strategy`, `read_business_rules`
+- Reports — `read_test_report` — done
+- Logs — `read_datadog_logs`
+
+**Layer 2 — QA workflows** that compose Layer 1 to model real QA work
+(not implemented):
+
+- `validate_ticket()` — decide whether a ticket is QA OK before production
+- `review_merge_request()` — QA-focused MR review (testability, risk, coverage)
+- `investigate_incident()` — decide whether a customer issue is a real product bug
+
+Consistent with the philosophy below: build the small capabilities first; the
+workflows only make sense once enough of them exist.
+
 ## Long-term vision
 
 This repository focuses on building QA **capabilities**: small, safe, composable

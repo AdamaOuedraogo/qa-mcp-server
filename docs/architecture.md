@@ -146,6 +146,46 @@ pattern everywhere:
 No other file needs to change. The composition root stays declarative, and each
 capability remains independently readable, reviewable, and testable.
 
+## Capability and workflow layers (direction)
+
+The current tools, resources, and prompts are **Layer 1**: low-level, typed,
+safe capabilities. The intended direction adds more Layer 1 connectors and a
+**Layer 2** of QA workflows that compose them. This section is direction, not
+current implementation.
+
+```text
+                   QA Agent
+                       │
+                       ▼
+              QA MCP Server
+      ┌─────────┬──────────┬──────────┬──────────┐
+      │         │          │          │          │
+    Jira     GitLab     Testing    Knowledge   Logs
+      │         │          │          │          │
+      ▼         ▼          ▼          ▼          ▼
+ Acceptance    MR      Playwright  Test       Datadog
+ Criteria    Pipeline   Cypress    Strategy    Logs
+                         Reports    Business
+                                    Rules
+```
+
+**Layer 1 — low-level QA capabilities.** One concrete action or read each,
+grouped by domain (Jira, GitLab, Testing, Knowledge, Reports, Logs). Examples:
+`read_jira_ticket`, `read_merge_request`, `read_pipeline_status`,
+`run_playwright_test`, `run_cypress_test`, `read_test_report`,
+`read_datadog_logs`, `read_test_strategy`, `read_business_rules`. Only the
+testing, reports and knowledge building blocks exist today.
+
+**Layer 2 — QA workflows.** Higher-level skills that orchestrate many Layer 1
+capabilities to model real QA work: `validate_ticket()`,
+`review_merge_request()`, `investigate_incident()`. Not implemented yet; see
+[docs/vision.md](vision.md) for what each is intended to do.
+
+Each Layer 2 workflow should stay a thin orchestrator over Layer 1. The
+capabilities keep the security properties (typed inputs, no shell, explicit
+execution boundary); the workflow only sequences them and reasons over the
+results. This keeps the security model unchanged as the surface grows.
+
 ## Design decisions
 
 - **One capability per file.** Predictable, reviewable, easy to test.
