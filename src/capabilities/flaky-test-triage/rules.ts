@@ -1,0 +1,379 @@
+import type {
+  Classification,
+  Evidence,
+  FlakyTriageInput,
+  RecommendedAction,
+  TestAttempt,
+} from "./schema.js";
+
+/**
+ * The expertise.
+ *
+ * This file is the point of the whole project: it encodes how a Staff QA
+ * engineer reasons about a failing test, not how to fetch one. Each detector is
+ * a pure function from a normalized observation to a piece of evidence. The
+ * classifier then weighs the evidence the way an experienced engineer would.
+ *
+ * The reasoning, in plain language, lives in ./docs/reasoning.md. Keep the two
+ * in sync — the prose is the spec, this file is the implementation.
+ */
+
+// --- Pattern vocabulary -----------------------------------------------------
+// These patterns come from real triage, not documentation. They intentionally
+// match on the *message text* because that is what reporters actually give you.
+
+const TIMEOUT_PATTERNS = [
+  /timeout/i,
+  /timed out/i,
+  /exceeded .*ms/i,
+  /waiting for (selector|locator|element|response)/i,
+  /waiting until/i,
+];
+
+const INFRA_PATTERNS = [
+  /econnrefused/i,
+  /econnreset/i,
+  /etimedout/i,
+  /enotfound/i,
+  /socket hang up/i,
+  /net::err/i,
+  /getaddrinfo/i,
+  /\b50[234]\b/, // 502/503/504 from a dependency
+  /connection (refused|reset|closed)/i,
+  /dns/i,
+];
+
+const RACE_PATTERNS = [
+  /detached from (the )?dom/i,
+  /element is not attached/i,
+  /not stable/i,
+  /is not visible/i,
+  /intercepts pointer events/i,
+  /element is outside of the viewport/i,
+  /animation/i,
+  /stale element/i,
+];
+
+const DATA_STATE_PATTERNS = [
+  /already exists/i,
+  /duplicate key/i,
+  /unique constraint/i,
+  /not found/i, // a record another test was supposed to create
+  /expected .* rows/i,
+  /seed/i,
+];
+
+const ASSERTION_PATTERNS = [
+  /assertionerror/i,
+  /expect\(/i,
+  /to (equal|be|contain|have)/i,
+  /expected .* (to|but) /i,
+  /deep equal/i,
+];
+
+function anyMatch(text: string | undefined, patterns: RegExp[]): boolean {
+  if (!text) return false;
+  return patterns.some((p) => p.test(text));
+}
+
+function failedAttempts(attempts: TestAttempt[]): TestAttempt[] {
+  return attempts.filter((a) => a.status === "failed" || a.status === "timedOut");
+}
+
+function messageOf(a: TestAttempt): string {
+  return [a.errorType, a.errorMessage].filter(Boolean).join(": ");
+}
+
+// --- Signal detectors -------------------------------------------------------
+// Each returns Evidence or null. Weights are calibrated so that a single
+// decisive signal (passed-on-retry) can carry a verdict, while weaker signals
+// must corroborate.
+
+/**
+ * The decisive one. Same test, same commit, one attempt failed and a later one
+ * passed. By definition the code is not deterministically broken → flaky. We
+ * point it at the family suggested by the *failing* attempt's message.
+ */
+function passedOnRetry(input: FlakyTriageInput): Evidence | null {
+  const { attempts } = input;
+  const failedFirst = attempts.some((a) => a.status === "failed" || a.status === "timedOut");
+  const passedLater = attempts.some((a) => a.status === "passed");
+  if (!(failedFirst && passedLater)) return null;
+
+  const failing = failedAttempts(attempts)[0];
+  const msg = messageOf(failing);
+  const points = anyMatch(msg, RACE_PATTERNS)
+    ? "flaky_race_condition"
+    : anyMatch(msg, INFRA_PATTERNS)
+      ? "flaky_infrastructure"
+      : anyMatch(msg, TIMEOUT_PATTERNS)
+        ? "flaky_infrastructure"
+        : "flaky_infrastructure";
+
+  return {
+    signal: "passed-on-retry",
+    observation: `Failed on attempt ${failing.attempt}, passed on a later retry at the same commit.`,
+    points,
+    weight: 0.95,
+  };
+}
+
+/** Timeout / waiting errors: timing-sensitive, usually infra or under-provisioned runners. */
+function timeoutError(input: FlakyTriageInput): Evidence | null {
+  const hit = failedAttempts(input.attempts).find(
+    (a) => a.status === "timedOut" || anyMatch(messageOf(a), TIMEOUT_PATTERNS),
+  );
+  if (!hit) return null;
+  return {
+    signal: "timeout-error",
+    observation: `Failure is a timeout / waiting error: "${messageOf(hit).slice(0, 140)}".`,
+    points: "flaky_infrastructure",
+    weight: 0.5,
+  };
+}
+
+/** Network / dependency / runner errors: environmental, not the code under test. */
+function infraError(input: FlakyTriageInput): Evidence | null {
+  const hit = failedAttempts(input.attempts).find((a) => anyMatch(messageOf(a), INFRA_PATTERNS));
+  if (!hit) return null;
+  return {
+    signal: "infrastructure-error",
+    observation: `Failure references network/environment: "${messageOf(hit).slice(0, 140)}".`,
+    points: "flaky_infrastructure",
+    weight: 0.7,
+  };
+}
+
+/** Race conditions: detached/unstable elements, animations, pointer interception. */
+function raceCondition(input: FlakyTriageInput): Evidence | null {
+  const hit = failedAttempts(input.attempts).find((a) => anyMatch(messageOf(a), RACE_PATTERNS));
+  if (!hit) return null;
+  return {
+    signal: "race-condition",
+    observation: `Failure references a UI race: "${messageOf(hit).slice(0, 140)}".`,
+    points: "flaky_race_condition",
+    weight: 0.7,
+  };
+}
+
+/** Shared-state / ordering contamination. */
+function dataOrStateContamination(input: FlakyTriageInput): Evidence | null {
+  const hit = failedAttempts(input.attempts).find((a) => anyMatch(messageOf(a), DATA_STATE_PATTERNS));
+  if (!hit) return null;
+  return {
+    signal: "data-or-state",
+    observation: `Failure suggests shared data/state or test ordering: "${messageOf(hit).slice(0, 140)}".`,
+    points: "flaky_data_or_state",
+    weight: 0.55,
+  };
+}
+
+/** Intermittent history: a pass rate strictly between "always" and "never" is flake by definition. */
+function intermittentHistory(input: FlakyTriageInput): Evidence | null {
+  const h = input.history;
+  if (!h || h.runs < 5) return null;
+  const failRate = h.failures / h.runs;
+  if (failRate <= 0.02 || failRate >= 0.98) return null; // deterministic either way
+  return {
+    signal: "intermittent-history",
+    observation: `Failed ${h.failures}/${h.runs} recent runs (${Math.round(failRate * 100)}%) — intermittent.`,
+    points: "flaky_infrastructure",
+    weight: 0.6,
+  };
+}
+
+/** Volatile error messages across history: non-determinism, a hallmark of flake. */
+function volatileErrors(input: FlakyTriageInput): Evidence | null {
+  const h = input.history;
+  if (!h?.distinctErrorMessages || h.distinctErrorMessages < 2) return null;
+  return {
+    signal: "volatile-error-messages",
+    observation: `${h.distinctErrorMessages} distinct failure messages across recent runs.`,
+    points: "flaky_infrastructure",
+    weight: 0.45,
+  };
+}
+
+/**
+ * The counter-signal. Every attempt failed with the *same* assertion error, no
+ * retry ever passed. This is deterministic. If the code under test also changed
+ * in the diff, this is almost certainly a real regression — and must NOT be
+ * quarantined, or the bug ships.
+ */
+function deterministicRegression(input: FlakyTriageInput): Evidence | null {
+  const failed = failedAttempts(input.attempts);
+  const anyPass = input.attempts.some((a) => a.status === "passed");
+  if (anyPass || failed.length < input.attempts.length) return null; // something passed → not this
+  const messages = new Set(failed.map((a) => messageOf(a)));
+  const stable = messages.size === 1;
+  const assertion = failed.some((a) => anyMatch(messageOf(a), ASSERTION_PATTERNS));
+  if (!stable && !assertion) return null;
+
+  const changedBoost = input.changedInDiff ? 0.25 : 0;
+  const base = assertion ? 0.6 : 0.4;
+  return {
+    signal: "deterministic-assertion-failure",
+    observation:
+      `All ${failed.length} attempt(s) failed identically` +
+      (assertion ? " on an assertion" : "") +
+      (input.changedInDiff ? "; the code under test changed in this diff." : "."),
+    points: "regression",
+    weight: Math.min(0.95, base + changedBoost),
+  };
+}
+
+const DETECTORS: Array<(i: FlakyTriageInput) => Evidence | null> = [
+  passedOnRetry,
+  timeoutError,
+  infraError,
+  raceCondition,
+  dataOrStateContamination,
+  intermittentHistory,
+  volatileErrors,
+  deterministicRegression,
+];
+
+/** Run every detector and keep the signals that fired. */
+export function collectEvidence(input: FlakyTriageInput): Evidence[] {
+  return DETECTORS.map((d) => d(input)).filter((e): e is Evidence => e !== null);
+}
+
+// --- Classification ---------------------------------------------------------
+
+const BUCKETS: Classification[] = [
+  "flaky_infrastructure",
+  "flaky_race_condition",
+  "flaky_data_or_state",
+  "likely_real_regression",
+];
+
+function bucketOf(e: Evidence): Classification {
+  return e.points === "regression" ? "likely_real_regression" : e.points;
+}
+
+/**
+ * Weigh the evidence. We sum weights per bucket, pick the strongest, and derive
+ * confidence from how dominant it is. A lone strong signal (e.g. passed-on-retry
+ * at 0.95) still yields high confidence; scattered weak signals stay uncertain.
+ */
+export function classify(evidence: Evidence[]): {
+  classification: Classification;
+  confidence: number;
+} {
+  if (evidence.length === 0) {
+    return { classification: "inconclusive", confidence: 0.2 };
+  }
+
+  const totals = new Map<Classification, number>();
+  for (const b of BUCKETS) totals.set(b, 0);
+  for (const e of evidence) {
+    const b = bucketOf(e);
+    totals.set(b, (totals.get(b) ?? 0) + e.weight);
+  }
+
+  let best: Classification = "inconclusive";
+  let bestScore = 0;
+  let sum = 0;
+  for (const [bucket, score] of totals) {
+    sum += score;
+    if (score > bestScore) {
+      bestScore = score;
+      best = bucket;
+    }
+  }
+
+  if (bestScore === 0) return { classification: "inconclusive", confidence: 0.2 };
+
+  // Dominance of the winning bucket, nudged up by the strongest single signal so
+  // that one decisive detector isn't diluted by weak noise.
+  const dominance = bestScore / sum;
+  const peak = Math.max(...evidence.filter((e) => bucketOf(e) === best).map((e) => e.weight));
+  const confidence = Math.min(0.98, Math.max(0.25, 0.5 * dominance + 0.5 * peak));
+
+  return { classification: best, confidence: Number(confidence.toFixed(2)) };
+}
+
+// --- Actions ----------------------------------------------------------------
+// The fix depends on the family. Note that we never recommend "just add a retry"
+// for a race or a regression — retries hide races and ship regressions.
+
+export function recommendActions(
+  classification: Classification,
+  input: FlakyTriageInput,
+): RecommendedAction[] {
+  switch (classification) {
+    case "flaky_infrastructure":
+      return [
+        {
+          action: "Quarantine the test to unblock the pipeline, tagged with this triage.",
+          rationale: "The failure is environmental, not a product bug — it should not block merges.",
+          priority: "now",
+        },
+        {
+          action: "Check dependency/runner health at the failure timestamps (5xx, DNS, CPU, network).",
+          rationale: "Infra flake correlates with degraded dependencies or under-provisioned runners.",
+          priority: "next",
+        },
+        {
+          action: "Stub or contract-test the flaky external dependency instead of hitting it live in E2E.",
+          rationale: "Removes the environmental variance at its source rather than masking it with retries.",
+          priority: "later",
+        },
+      ];
+    case "flaky_race_condition":
+      return [
+        {
+          action: "Replace hard waits / manual sleeps with web-first, auto-retrying assertions.",
+          rationale: "Race flake comes from asserting before the app settled; auto-waiting removes the race.",
+          priority: "now",
+        },
+        {
+          action: "Wait for the element to be stable/attached before interacting; assert on state, not timing.",
+          rationale: "Detached-node and pointer-interception errors are ordering bugs in the test.",
+          priority: "next",
+        },
+        {
+          action: "Do NOT paper over this with retries — retries hide the race and it will resurface.",
+          rationale: "The defect is real non-determinism in the test; retries only lower its frequency.",
+          priority: "next",
+        },
+      ];
+    case "flaky_data_or_state":
+      return [
+        {
+          action: "Isolate test data: unique fixtures per test, and reset/seed state in setup.",
+          rationale: "Shared state and test-order coupling cause intermittent, order-dependent failures.",
+          priority: "now",
+        },
+        {
+          action: "Run the suite in a randomized order in CI to surface hidden ordering dependencies.",
+          rationale: "Makes contamination reproducible instead of intermittent.",
+          priority: "next",
+        },
+      ];
+    case "likely_real_regression":
+      return [
+        {
+          action: "Do NOT quarantine. Treat as a failing gate and block the merge.",
+          rationale: "The failure is deterministic and assertion-based — quarantining would ship the bug.",
+          priority: "now",
+        },
+        {
+          action: input.changedInDiff
+            ? "Review the change in this diff that touches the code under test."
+            : "Bisect recent commits to find the change that introduced the failure.",
+          rationale: "A deterministic assertion failure has a root cause in code, not the environment.",
+          priority: "now",
+        },
+      ];
+    case "inconclusive":
+    default:
+      return [
+        {
+          action: "Collect more signal: retry once in CI, and pull this test's recent pass/fail history.",
+          rationale: "A single deterministic-looking failure without history or a retry is ambiguous.",
+          priority: "now",
+        },
+      ];
+  }
+}
