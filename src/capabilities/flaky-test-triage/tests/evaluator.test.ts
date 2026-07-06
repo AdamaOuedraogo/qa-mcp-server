@@ -63,6 +63,38 @@ test("intermittent history alone yields a flaky verdict", () => {
   assert.ok(j.evidence.some((e) => e.signal === "intermittent-history"));
 });
 
+test("vendor flaky verdict raises confidence when the local verdict already agrees", () => {
+  const observation = {
+    testId: "search.spec.ts :: returns results",
+    attempts: [{ attempt: 0, status: "failed" as const, errorMessage: "request failed: ECONNREFUSED" }],
+  };
+  const without = triageFlakyTest(observation);
+  const withVendor = triageFlakyTest({
+    ...observation,
+    vendorSignals: { isFlakyVendorVerdict: true, severity: "high" as const },
+  });
+  assert.equal(withVendor.classification, without.classification); // verdict unchanged
+  assert.ok(
+    withVendor.confidence > without.confidence,
+    `expected prior to raise confidence: ${without.confidence} -> ${withVendor.confidence}`,
+  );
+});
+
+test("SAFETY: a vendor flaky verdict never overrides a real regression", () => {
+  const j = triageFlakyTest({
+    testId: "cart.spec.ts :: shows correct total",
+    changedInDiff: true,
+    vendorSignals: { isFlakyVendorVerdict: true, flakinessRate: 0.4, severity: "high" as const },
+    attempts: [
+      { attempt: 0, status: "failed", errorType: "AssertionError", errorMessage: "expected 42 to equal 40" },
+      { attempt: 1, status: "failed", errorType: "AssertionError", errorMessage: "expected 42 to equal 40" },
+    ],
+  });
+  assert.equal(j.classification, "likely_real_regression"); // prior must not flip it
+  assert.equal(j.quarantineForbidden, true);
+  assert.equal(j.quarantineRecommended, false);
+});
+
 test("adapter normalizes Playwright JSON into observations", () => {
   const report = {
     suites: [

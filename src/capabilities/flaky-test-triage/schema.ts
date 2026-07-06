@@ -58,6 +58,52 @@ export const TestHistorySchema = z.object({
 });
 export type TestHistory = z.infer<typeof TestHistorySchema>;
 
+/**
+ * Artifacts that point at deeper evidence. These are references, not parsed
+ * content — e.g. a Cypress Test Replay link. The resolution phase (not yet
+ * built) will mine them; for now they are carried through so we don't lose the
+ * door to the evidence.
+ */
+export const ArtifactsSchema = z.object({
+  testReplayUrl: z.string().optional().describe("Cypress Test Replay link for this attempt."),
+  screenshotUrl: z.string().optional().describe("Failure screenshot."),
+  videoUrl: z.string().optional().describe("Run video."),
+});
+export type Artifacts = z.infer<typeof ArtifactsSchema>;
+
+/**
+ * Signals a vendor (e.g. Cypress Cloud) already computed. Consumed as *priors*
+ * only — they nudge confidence, never override the local verdict. A vendor
+ * "flaky" flag must never flip a deterministic-regression finding.
+ */
+export const VendorSignalsSchema = z.object({
+  isFlakyVendorVerdict: z
+    .boolean()
+    .optional()
+    .describe("Whether the vendor's flaky detection flagged this test."),
+  flakinessRate: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe("Vendor-computed flakiness rate over recent runs (0..1)."),
+  severity: z
+    .enum(["high", "medium", "low"])
+    .optional()
+    .describe("Vendor severity classification of the flakiness."),
+});
+export type VendorSignals = z.infer<typeof VendorSignalsSchema>;
+
+/** Where/when the failure happened. Traceability only; not used by the expertise yet. */
+export const RunContextSchema = z.object({
+  runNumber: z.number().int().nonnegative().optional(),
+  runUrl: z.string().optional(),
+  branch: z.string().optional(),
+  commit: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+export type RunContext = z.infer<typeof RunContextSchema>;
+
 /** The normalized observation a triage operates on. */
 export const FlakyTriageInputSchema = z.object({
   testId: z.string().min(1).describe("Stable identifier, e.g. file + full title."),
@@ -75,6 +121,11 @@ export const FlakyTriageInputSchema = z.object({
       "Whether the test file (or code it exercises) changed in the diff under test. " +
         "A deterministic failure on changed code points to a real regression, not flake.",
     ),
+  // --- Additive, optional. Populated by cloud adapters (e.g. Cypress Cloud). ---
+  // The core expertise never requires these; they enrich it when present.
+  artifacts: ArtifactsSchema.optional(),
+  vendorSignals: VendorSignalsSchema.optional(),
+  runContext: RunContextSchema.optional(),
 });
 export type FlakyTriageInput = z.infer<typeof FlakyTriageInputSchema>;
 

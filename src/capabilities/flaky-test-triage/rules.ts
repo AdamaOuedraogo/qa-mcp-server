@@ -4,6 +4,7 @@ import type {
   FlakyTriageInput,
   RecommendedAction,
   TestAttempt,
+  VendorSignals,
 } from "./schema.js";
 
 /**
@@ -376,4 +377,60 @@ export function recommendActions(
         },
       ];
   }
+}
+
+// --- Vendor priors ----------------------------------------------------------
+// A vendor (e.g. Cypress Cloud) may already have flagged this test as flaky, with
+// a rate and a severity. We consume that as a *prior*: it can raise or lower our
+// confidence, but it never sets the verdict. Most importantly, a vendor "flaky"
+// flag must never override a deterministic-regression finding — doing so could
+// quarantine a real bug behind a green pipeline.
+
+export function applyVendorPriors(
+  base: { classification: Classification; confidence: number },
+  vendor: VendorSignals | undefined,
+): { classification: Classification; confidence: number; note?: string } {
+  if (!vendor) return base;
+
+  const saysFlaky =
+    vendor.isFlakyVendorVerdict === true ||
+    (typeof vendor.flakinessRate === "number" &&
+      vendor.flakinessRate > 0.02 &&
+      vendor.flakinessRate < 0.98);
+  if (!saysFlaky) return base;
+
+  const strength = vendor.severity === "high" ? 0.15 : vendor.severity === "medium" ? 0.1 : 0.06;
+  const round = (n: number) => Number(n.toFixed(2));
+
+  // Conflict: the local expertise says real regression. The vendor prior loses —
+  // we keep the verdict, lower confidence to reflect the disagreement, and flag it.
+  if (base.classification === "likely_real_regression") {
+    return {
+      classification: base.classification,
+      confidence: round(Math.max(0.25, base.confidence - strength)),
+      note:
+        "Note: the vendor flags this test as flaky, which conflicts with the " +
+        "deterministic-regression signal. Verdict kept — a vendor prior must not hide a " +
+        "real bug — but the disagreement is worth investigating.",
+    };
+  }
+
+  // Agreement: we already see a flaky family → the independent vendor flag raises confidence.
+  if (base.classification !== "inconclusive") {
+    return {
+      classification: base.classification,
+      confidence: round(Math.min(0.98, base.confidence + strength)),
+      note: "Confidence raised: the vendor independently flags this test as flaky.",
+    };
+  }
+
+  // Inconclusive locally, but the vendor has cross-run history we don't. We can't
+  // invent a family, so we stay inconclusive and nudge confidence, noting the gap.
+  return {
+    classification: base.classification,
+    confidence: round(Math.min(0.6, base.confidence + strength)),
+    note:
+      "The vendor flags this test as flaky, but no local signal indicates which family. " +
+      "Collect attempt-level detail (retries, error messages) to classify and resolve it.",
+  };
 }

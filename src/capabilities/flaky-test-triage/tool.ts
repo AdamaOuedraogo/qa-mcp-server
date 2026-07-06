@@ -49,6 +49,32 @@ export function registerTriageFlakyTest(server: McpServer): void {
           .boolean()
           .optional()
           .describe("Whether the test or the code it exercises changed in the diff under test."),
+        artifacts: z
+          .object({
+            testReplayUrl: z.string().optional(),
+            screenshotUrl: z.string().optional(),
+            videoUrl: z.string().optional(),
+          })
+          .optional()
+          .describe("Evidence links (e.g. Cypress Test Replay). Carried through, not parsed yet."),
+        vendorSignals: z
+          .object({
+            isFlakyVendorVerdict: z.boolean().optional(),
+            flakinessRate: z.number().min(0).max(1).optional(),
+            severity: z.enum(["high", "medium", "low"]).optional(),
+          })
+          .optional()
+          .describe("Vendor-computed flaky signals (e.g. Cypress Cloud). Used as confidence priors."),
+        runContext: z
+          .object({
+            runNumber: z.number().int().nonnegative().optional(),
+            runUrl: z.string().optional(),
+            branch: z.string().optional(),
+            commit: z.string().optional(),
+            tags: z.array(z.string()).optional(),
+          })
+          .optional()
+          .describe("Run traceability (run number/URL, branch, commit, tags)."),
       },
     },
     async (input) => {

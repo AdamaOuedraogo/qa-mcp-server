@@ -3,7 +3,7 @@ import {
   type FlakyTriageInput,
   type FlakyTriageJudgment,
 } from "./schema.js";
-import { classify, collectEvidence, recommendActions } from "./rules.js";
+import { applyVendorPriors, classify, collectEvidence, recommendActions } from "./rules.js";
 
 /**
  * The capability entry point: a normalized observation in, a structured QA
@@ -17,7 +17,14 @@ export function triageFlakyTest(rawInput: FlakyTriageInput): FlakyTriageJudgment
   const input = FlakyTriageInputSchema.parse(rawInput);
 
   const evidence = collectEvidence(input);
-  const { classification, confidence } = classify(evidence);
+  const base = classify(evidence);
+
+  // Fold in any vendor prior (e.g. Cypress Cloud's flaky verdict). Priors adjust
+  // confidence only; they never override the local verdict — the safety guard
+  // against quarantining a real regression lives in classify(), untouched here.
+  const prior = applyVendorPriors(base, input.vendorSignals);
+  const { classification, confidence } = prior;
+
   const recommendedActions = recommendActions(classification, input);
 
   const quarantineForbidden = classification === "likely_real_regression";
@@ -26,11 +33,15 @@ export function triageFlakyTest(rawInput: FlakyTriageInput): FlakyTriageJudgment
     classification !== "inconclusive" &&
     confidence >= 0.6;
 
+  const summary = prior.note
+    ? `${summarize(classification, confidence)} ${prior.note}`
+    : summarize(classification, confidence);
+
   return {
     testId: input.testId,
     classification,
     confidence,
-    summary: summarize(classification, confidence),
+    summary,
     evidence,
     recommendedActions,
     quarantineRecommended,
