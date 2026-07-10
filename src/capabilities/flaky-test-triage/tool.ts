@@ -49,6 +49,17 @@ export function registerTriageFlakyTest(server: McpServer): void {
           .boolean()
           .optional()
           .describe("Whether the test or the code it exercises changed in the diff under test."),
+        baseline: z
+          .object({
+            failed: z.boolean(),
+            ref: z.string().optional(),
+            runUrl: z.string().optional(),
+          })
+          .optional()
+          .describe(
+            "Whether the same test also fails on the baseline (target branch). If it does, the " +
+              "failure was not introduced by this change (marked pre-existing).",
+          ),
         artifacts: z
           .object({
             testReplayUrl: z.string().optional(),
@@ -92,6 +103,9 @@ function render(j: FlakyTriageJudgment): string {
     `**Verdict:** ${j.summary}`,
     `**Classification:** ${j.classification}`,
     `**Confidence:** ${Math.round(j.confidence * 100)}%`,
+    j.preExisting
+      ? "**Origin:** ⏮ pre-existing — also fails on the baseline; not introduced by this change."
+      : "**Origin:** introduced by / observed in this change.",
     j.quarantineForbidden
       ? "**Quarantine:** ⛔ FORBIDDEN — this looks like a real bug; quarantining would ship it."
       : `**Quarantine:** ${j.quarantineRecommended ? "recommended to unblock the pipeline while investigating" : "not recommended yet"}`,
@@ -103,6 +117,14 @@ function render(j: FlakyTriageJudgment): string {
     "",
     "## Recommended actions",
     ...j.recommendedActions.map((a) => `- _[${a.priority}]_ **${a.action}**\n  ${a.rationale}`),
+    "",
+    "## Safe repairs",
+    "_Allowed:_",
+    ...(j.safeRepairs.allowed.length
+      ? j.safeRepairs.allowed.map((r) => `- ✅ ${r}`)
+      : ["- (none — there is no test-level repair for a real regression; fix the product or revert)"]),
+    "_Never:_",
+    ...j.safeRepairs.forbidden.map((r) => `- ⛔ ${r}`),
     "",
     "## Judgment (JSON)",
     "```json",

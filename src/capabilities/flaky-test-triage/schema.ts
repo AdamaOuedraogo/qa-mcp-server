@@ -94,6 +94,25 @@ export const VendorSignalsSchema = z.object({
 });
 export type VendorSignals = z.infer<typeof VendorSignalsSchema>;
 
+/**
+ * The same test's outcome on the baseline (e.g. the target branch, `main`).
+ * The single most decisive answer to "did *this change* break it?": if the test
+ * already fails on the baseline, the failure was not introduced here. Generic —
+ * the baseline is any reference run, however you obtained it (CI, a prior run,
+ * a vendor's main-branch history). No provider is assumed.
+ */
+export const BaselineSchema = z.object({
+  failed: z
+    .boolean()
+    .describe("Whether the same test also fails on the baseline (target branch)."),
+  ref: z
+    .string()
+    .optional()
+    .describe("The baseline reference, e.g. 'main' or a commit SHA. Traceability only."),
+  runUrl: z.string().optional().describe("Link to the baseline run, if any."),
+});
+export type Baseline = z.infer<typeof BaselineSchema>;
+
 /** Where/when the failure happened. Traceability only; not used by the expertise yet. */
 export const RunContextSchema = z.object({
   runNumber: z.number().int().nonnegative().optional(),
@@ -123,6 +142,7 @@ export const FlakyTriageInputSchema = z.object({
     ),
   // --- Additive, optional. Populated by cloud adapters (e.g. Cypress Cloud). ---
   // The core expertise never requires these; they enrich it when present.
+  baseline: BaselineSchema.optional(),
   artifacts: ArtifactsSchema.optional(),
   vendorSignals: VendorSignalsSchema.optional(),
   runContext: RunContextSchema.optional(),
@@ -138,7 +158,8 @@ export const ClassificationSchema = z.enum([
   "flaky_infrastructure", // network, environment, timeouts, runner health
   "flaky_race_condition", // app/test race: detached nodes, unstable elements, ordering
   "flaky_data_or_state", // shared state / test-order / fixture contamination
-  "likely_real_regression", // deterministic, assertion-based — a real bug
+  "test_or_config_error", // deterministic, but the *test* is broken: bad/undefined input, missing env/fixture
+  "likely_real_regression", // deterministic, assertion-based — a real *product* bug
   "inconclusive", // not enough signal to decide
 ]);
 export type Classification = z.infer<typeof ClassificationSchema>;
@@ -147,10 +168,33 @@ export type Classification = z.infer<typeof ClassificationSchema>;
 export const EvidenceSchema = z.object({
   signal: z.string().describe("Named signal, e.g. passed-on-retry."),
   observation: z.string().describe("What was actually seen in the input."),
-  points: z.enum(["flaky_infrastructure", "flaky_race_condition", "flaky_data_or_state", "regression"]),
+  points: z.enum([
+    "flaky_infrastructure",
+    "flaky_race_condition",
+    "flaky_data_or_state",
+    "test_or_config_error",
+    "regression",
+    // Orthogonal to the root-cause families: it doesn't say *why* the test
+    // fails, only that this change didn't introduce it. Excluded from the vote.
+    "pre_existing",
+  ]),
   weight: z.number().min(0).max(1).describe("How strongly this signal argues its direction."),
 });
 export type Evidence = z.infer<typeof EvidenceSchema>;
+
+/**
+ * The safe-repair contract for a classification. Encodes what a Staff QA engineer
+ * will and will not do to a test — framework-agnostic. `forbidden` is the load-
+ * bearing half: it is how we stop an agent "fixing" a test by hiding a real bug
+ * (sleeping, weakening assertions, skipping, retrying a regression away).
+ */
+export const RepairContractSchema = z.object({
+  allowed: z.array(z.string()).describe("Repairs a QA engineer may apply for this classification."),
+  forbidden: z
+    .array(z.string())
+    .describe("Repairs that must never be applied — they mask defects rather than fix flake."),
+});
+export type RepairContract = z.infer<typeof RepairContractSchema>;
 
 /** A concrete next step, prioritized the way a Staff QA would sequence it. */
 export const RecommendedActionSchema = z.object({
@@ -168,6 +212,16 @@ export const FlakyTriageJudgmentSchema = z.object({
   summary: z.string().describe("One-line assessment a human can act on."),
   evidence: z.array(EvidenceSchema),
   recommendedActions: z.array(RecommendedActionSchema),
+  safeRepairs: RepairContractSchema.describe(
+    "Allowed vs forbidden repairs for this classification — the guardrails an agent must honour.",
+  ),
+  preExisting: z
+    .boolean()
+    .describe(
+      "True when the same test also fails on the baseline — the failure was not introduced by " +
+        "the change under test. Orthogonal to the classification; a pre-existing failure can still " +
+        "be a real bug, it just isn't *this* change's fault.",
+    ),
   quarantineRecommended: z
     .boolean()
     .describe("Whether to quarantine the test to unblock the pipeline while investigating."),

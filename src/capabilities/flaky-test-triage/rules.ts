@@ -72,6 +72,22 @@ const ASSERTION_PATTERNS = [
   /deep equal/i,
 ];
 
+// The test itself is broken or misconfigured: it fed an undefined/invalid value,
+// dereferenced nothing, or a required env/fixture was absent. Deterministic, but
+// the fix is in the *test/config*, not the product — and it is NOT flake.
+const CONFIG_ERROR_PATTERNS = [
+  /can only accept/i, // framework arg guards, e.g. cy.type/select
+  /passed in.*(undefined|null)/i,
+  /cannot read propert(y|ies) of (undefined|null)/i,
+  /(undefined|null) is not (an? )?(object|function|iterable)/i,
+  /is not a function/i,
+  /is not defined/i, // ReferenceError
+  /require is not defined/i, // test bundling/config, not infra
+  /(is required|is not set)\b/i,
+  /missing (required )?(env|environment|config|configuration|variable|fixture|credential)/i,
+  /fixture .*(not found|does not exist)/i,
+];
+
 function anyMatch(text: string | undefined, patterns: RegExp[]): boolean {
   if (!text) return false;
   return patterns.some((p) => p.test(text));
@@ -196,6 +212,25 @@ function volatileErrors(input: FlakyTriageInput): Evidence | null {
 }
 
 /**
+ * The test is broken, not the product. An argument-type error (undefined passed
+ * to an interaction), a null dereference, a ReferenceError, or a missing
+ * env/fixture. Deterministic like a regression, but it fails *before* it can
+ * exercise the product — so calling it a regression sends the engineer to bisect
+ * product commits that are innocent. High weight so it outranks the generic
+ * deterministic-regression signal it would otherwise be mistaken for.
+ */
+function testOrConfigError(input: FlakyTriageInput): Evidence | null {
+  const hit = failedAttempts(input.attempts).find((a) => anyMatch(messageOf(a), CONFIG_ERROR_PATTERNS));
+  if (!hit) return null;
+  return {
+    signal: "test-or-config-error",
+    observation: `Failure is a broken-test/config error, not a product assertion: "${messageOf(hit).slice(0, 140)}".`,
+    points: "test_or_config_error",
+    weight: 0.75,
+  };
+}
+
+/**
  * The counter-signal. Every attempt failed with the *same* assertion error, no
  * retry ever passed. This is deterministic. If the code under test also changed
  * in the diff, this is almost certainly a real regression — and must NOT be
@@ -223,6 +258,24 @@ function deterministicRegression(input: FlakyTriageInput): Evidence | null {
   };
 }
 
+/**
+ * Cross-reference with the baseline. If the *same test* also fails on the target
+ * branch, this change did not introduce the failure. This is orthogonal to the
+ * root cause — the test may be flaky or genuinely broken — so this evidence does
+ * NOT vote for a family (see `bucketOf`). It sets the `preExisting` flag, which
+ * relaxes "block this change" without ever relaxing "this might be a real bug".
+ */
+function failsOnBaseline(input: FlakyTriageInput): Evidence | null {
+  if (input.baseline?.failed !== true) return null;
+  const ref = input.baseline.ref ? ` (${input.baseline.ref})` : "";
+  return {
+    signal: "fails-on-baseline",
+    observation: `The same test already fails on the baseline${ref} — not introduced by this change.`,
+    points: "pre_existing",
+    weight: 0.9,
+  };
+}
+
 const DETECTORS: Array<(i: FlakyTriageInput) => Evidence | null> = [
   passedOnRetry,
   timeoutError,
@@ -231,7 +284,9 @@ const DETECTORS: Array<(i: FlakyTriageInput) => Evidence | null> = [
   dataOrStateContamination,
   intermittentHistory,
   volatileErrors,
+  testOrConfigError,
   deterministicRegression,
+  failsOnBaseline,
 ];
 
 /** Run every detector and keep the signals that fired. */
@@ -245,11 +300,22 @@ const BUCKETS: Classification[] = [
   "flaky_infrastructure",
   "flaky_race_condition",
   "flaky_data_or_state",
+  "test_or_config_error",
   "likely_real_regression",
 ];
 
-function bucketOf(e: Evidence): Classification {
+/**
+ * Map a piece of evidence to the family it votes for, or null if it is not a
+ * root-cause vote (e.g. `pre_existing`, which is orthogonal to the families).
+ */
+function bucketOf(e: Evidence): Classification | null {
+  if (e.points === "pre_existing") return null;
   return e.points === "regression" ? "likely_real_regression" : e.points;
+}
+
+/** Whether the observation was already failing on the baseline (target branch). */
+export function isPreExisting(input: FlakyTriageInput): boolean {
+  return input.baseline?.failed === true;
 }
 
 /**
@@ -269,6 +335,7 @@ export function classify(evidence: Evidence[]): {
   for (const b of BUCKETS) totals.set(b, 0);
   for (const e of evidence) {
     const b = bucketOf(e);
+    if (b === null) continue; // orthogonal evidence (e.g. pre_existing) doesn't vote
     totals.set(b, (totals.get(b) ?? 0) + e.weight);
   }
 
@@ -349,6 +416,32 @@ export function recommendActions(
         {
           action: "Run the suite in a randomized order in CI to surface hidden ordering dependencies.",
           rationale: "Makes contamination reproducible instead of intermittent.",
+          priority: "next",
+        },
+      ];
+    case "test_or_config_error":
+      return [
+        {
+          action:
+            "Fix the test's input/configuration: supply the missing value (env var, fixture, " +
+            "credential) or guard against it — the test fed an undefined/invalid value downstream.",
+          rationale:
+            "Deterministic, but the defect is in the test setup, not the product. It will pass once " +
+            "the input/config is correct; no product change is needed.",
+          priority: "now",
+        },
+        {
+          action:
+            "Make the test fail fast with a clear 'missing X' message when required config is absent, " +
+            "instead of passing undefined into a framework call.",
+          rationale:
+            "Turns a cryptic framework error into an actionable signal and stops it from being " +
+            "mis-triaged as a product regression.",
+          priority: "next",
+        },
+        {
+          action: "Do NOT bisect product commits or quarantine — the product is not implicated.",
+          rationale: "This is broken coverage, not a shipped bug; treating it as either wastes effort.",
           priority: "next",
         },
       ];
