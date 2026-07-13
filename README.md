@@ -252,6 +252,27 @@ environment but can never define what it points to:
 Because `environment` is validated against the enum, arbitrary values (e.g. an
 injected URL or shell fragment) are rejected before the handler runs.
 
+### Non-default project layouts
+
+Real projects don't always use the default command shape. A Cypress project may
+keep its config in a custom file, require `--e2e`, or read project-specific
+environment variables; a Playwright project may use a non-default config file.
+So the server can plug into **any** project, these details are supplied by the
+**operator** (never the caller) through environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `QA_MCP_CYPRESS_CONFIG_FILE` | Adds `--config-file <path>` |
+| `QA_MCP_CYPRESS_E2E` | Adds `--e2e` when truthy (`1`/`true`/`yes`/`on`) |
+| `QA_MCP_CYPRESS_PROJECT` | Injects `PROJECT=<value>` into the child env |
+| `QA_MCP_CYPRESS_ENV_VAR` | Injects the **selected** environment name into this env var (e.g. `ENVIRONMENT`) |
+| `QA_MCP_PLAYWRIGHT_CONFIG_FILE` | Adds `--config <path>` |
+
+The caller still only picks typed parameters and closed enums; these values are
+passed as discrete argv entries or child env, never interpolated into a shell
+string. See [Connect to a project](docs/connect-to-a-project.md) for a worked
+example (a Cucumber/hybrid Cypress project).
+
 ---
 
 # Architecture

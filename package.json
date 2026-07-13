@@ -32,7 +32,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/capabilities/*/tests/*.test.ts"
+    "test": "node --import tsx --test src/*.test.ts src/capabilities/*/tests/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

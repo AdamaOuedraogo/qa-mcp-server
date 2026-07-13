@@ -4,6 +4,7 @@ import { sanitizeArg } from "../utils/command.js";
 import { getExecutionConfig, isLiveExecutionEnabled } from "../config.js";
 import { ExecutionError, renderRunResult, runInProject } from "../execution/adapter.js";
 import { TARGET_ENVIRONMENTS, resolveEnvironment } from "../environments.js";
+import { getCypressRunnerConfig } from "../runners.js";
 
 /**
  * Tool: run_cypress_test
@@ -19,6 +20,12 @@ import { TARGET_ENVIRONMENTS, resolveEnvironment } from "../environments.js";
  * environment name is also passed as `--env target=<name>` so the project can
  * branch on it. The caller can select an environment but can never define what
  * it points to.
+ *
+ * To support non-default Cypress setups (custom config file, Cucumber/hybrid
+ * projects that require `--e2e` and PROJECT/ENVIRONMENT env vars), the operator
+ * provides those details via environment variables (see runners.ts). This lets
+ * the server plug into any Cypress project without giving the caller free-form
+ * command control.
  */
 export function registerRunCypressTest(server: McpServer): void {
   server.registerTool(
@@ -56,6 +63,11 @@ export function registerRunCypressTest(server: McpServer): void {
       if (safeSpec) args.push("--spec", safeSpec);
       if (safeBrowser) args.push("--browser", safeBrowser);
 
+      // Operator-provided invocation details for non-default Cypress setups.
+      const runner = getCypressRunnerConfig();
+      if (runner.e2e) args.push("--e2e");
+      if (runner.configFile) args.push("--config-file", sanitizeArg(runner.configFile));
+
       // Resolve the closed environment name to operator-provided config.
       const resolved = environment ? resolveEnvironment(environment) : undefined;
       const extraEnv: Record<string, string> = {};
@@ -63,7 +75,11 @@ export function registerRunCypressTest(server: McpServer): void {
         // `target` value comes from the fixed enum, so it is always safe.
         args.push("--env", `target=${resolved.name}`);
         if (resolved.baseUrl) extraEnv.CYPRESS_BASE_URL = resolved.baseUrl;
+        // Some projects resolve their config from a plain env var (e.g. ENVIRONMENT).
+        if (runner.environmentVar) extraEnv[runner.environmentVar] = resolved.name;
       }
+      // Project selector some Cucumber/hybrid setups require (e.g. PROJECT=hybrid).
+      if (runner.project) extraEnv.PROJECT = runner.project;
 
       const command = `npx ${args.join(" ")}`;
 
@@ -74,17 +90,22 @@ export function registerRunCypressTest(server: McpServer): void {
           ]
         : ["- environment: (project default)"];
 
+      // Injected child env vars (shown so a dry run is fully transparent).
+      const injectedEnv = Object.entries(extraEnv).map(([k, v]) => `${k}=${v}`);
+
       // Dry-run (default): describe the command without executing anything.
       if (!isLiveExecutionEnabled()) {
         const summary = [
           "Prepared Cypress run (dry run — not executed).",
           "",
           `Command: ${command}`,
-          resolved?.baseUrl ? `Env:     CYPRESS_BASE_URL=${resolved.baseUrl}` : null,
+          injectedEnv.length ? `Env:     ${injectedEnv.join(" ")}` : null,
           "",
           "Parameters:",
-          `- spec:    ${safeSpec ?? "(all specs)"}`,
-          `- browser: ${safeBrowser ?? "(default browser)"}`,
+          `- spec:       ${safeSpec ?? "(all specs)"}`,
+          `- browser:    ${safeBrowser ?? "(default browser)"}`,
+          `- config-file: ${runner.configFile ?? "(default)"}`,
+          `- e2e flag:    ${runner.e2e ? "yes" : "no"}`,
           ...envLines,
           "",
           "Live execution is disabled. To enable it, set QA_MCP_EXECUTION_MODE=live " +

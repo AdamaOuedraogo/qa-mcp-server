@@ -37,6 +37,23 @@ Live execution runs **only** when both `QA_MCP_EXECUTION_MODE=live` and
 `QA_MCP_PROJECT_DIR` are set. Otherwise the run tools stay in dry-run and simply
 return the exact command they *would* run — safe to connect anywhere.
 
+### Non-default project layouts (operator variables)
+
+The run tools default to a plain `cypress run` / `playwright test`. If your
+project needs more — a custom config file, Cypress `--e2e`, or project-specific
+env vars — declare it once, as the operator, through these variables. The caller
+(the model) never sees them and still only picks typed parameters.
+
+| Variable | Effect |
+| --- | --- |
+| `QA_MCP_CYPRESS_CONFIG_FILE` | Adds `--config-file <path>` |
+| `QA_MCP_CYPRESS_E2E` | Adds `--e2e` when truthy (`1`/`true`/`yes`/`on`) |
+| `QA_MCP_CYPRESS_PROJECT` | Injects `PROJECT=<value>` into the child env |
+| `QA_MCP_CYPRESS_ENV_VAR` | Injects the **selected** environment name into this env var (e.g. `ENVIRONMENT`) |
+| `QA_MCP_PLAYWRIGHT_CONFIG_FILE` | Adds `--config <path>` |
+
+Paths are relative to `QA_MCP_PROJECT_DIR`; `..` is rejected.
+
 ---
 
 ## Method A — Project-scoped `.mcp.json` (recommended)
@@ -141,6 +158,42 @@ server at that subfolder, not the repo root:
   }
 }
 ```
+
+## Example: a Cucumber/hybrid Cypress project
+
+Some Cypress projects don't keep `cypress.config.ts` at the root — they load a
+custom config and resolve settings from `PROJECT` / `ENVIRONMENT` env vars (a
+common Cucumber/hybrid pattern). Wire it up entirely through operator variables:
+
+```json
+{
+  "mcpServers": {
+    "qa": {
+      "command": "node",
+      "args": ["/absolute/path/to/qa-mcp-server/dist/index.js"],
+      "env": {
+        "QA_MCP_EXECUTION_MODE": "live",
+        "QA_MCP_PROJECT_DIR": "/absolute/path/to/your-app/testing",
+        "QA_MCP_CYPRESS_CONFIG_FILE": "./cypress/configs/hybrid.config.ts",
+        "QA_MCP_CYPRESS_E2E": "true",
+        "QA_MCP_CYPRESS_PROJECT": "hybrid",
+        "QA_MCP_CYPRESS_ENV_VAR": "ENVIRONMENT",
+        "QA_MCP_BASE_URL_STAGING": "http://localhost:3210"
+      }
+    }
+  }
+}
+```
+
+Calling `run_cypress_test` with `browser: "chrome"`, `environment: "staging"`
+then produces:
+
+```
+npx cypress run --browser chrome --e2e --config-file ./cypress/configs/hybrid.config.ts --env target=staging
+# child env: PROJECT=hybrid ENVIRONMENT=staging CYPRESS_BASE_URL=http://localhost:3210
+```
+
+which matches the project's own `cypress run --e2e --config-file …` script.
 
 ## Safety notes
 
