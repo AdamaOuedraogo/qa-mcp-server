@@ -4,6 +4,7 @@ import { sanitizeArg } from "../utils/command.js";
 import { getExecutionConfig, isLiveExecutionEnabled } from "../config.js";
 import { ExecutionError, renderRunResult, runInProject } from "../execution/adapter.js";
 import { TARGET_ENVIRONMENTS, resolveEnvironment } from "../environments.js";
+import { getPlaywrightRunnerConfig } from "../runners.js";
 
 /**
  * Tool: run_playwright_test
@@ -62,6 +63,10 @@ export function registerRunPlaywrightTest(server: McpServer): void {
       if (safeProject) args.push("--project", safeProject);
       if (headed) args.push("--headed");
 
+      // Operator-provided config file for non-default Playwright setups.
+      const runner = getPlaywrightRunnerConfig();
+      if (runner.configFile) args.push("--config", sanitizeArg(runner.configFile));
+
       // Resolve the closed environment name to operator-provided config.
       const resolved = environment ? resolveEnvironment(environment) : undefined;
       const extraEnv: Record<string, string> = {};
@@ -85,9 +90,10 @@ export function registerRunPlaywrightTest(server: McpServer): void {
           resolved?.baseUrl ? `Env:     PLAYWRIGHT_BASE_URL=${resolved.baseUrl}` : null,
           "",
           "Parameters:",
-          `- testPath: ${safeTestPath ?? "(all tests)"}`,
-          `- project:  ${safeProject ?? "(default projects)"}`,
-          `- headed:   ${headed ? "yes" : "no"}`,
+          `- testPath:    ${safeTestPath ?? "(all tests)"}`,
+          `- project:     ${safeProject ?? "(default projects)"}`,
+          `- headed:      ${headed ? "yes" : "no"}`,
+          `- config file: ${runner.configFile ?? "(default)"}`,
           ...envLines,
           "",
           "Live execution is disabled. To enable it, set QA_MCP_EXECUTION_MODE=live " +

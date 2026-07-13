@@ -1,0 +1,31 @@
+{
+  "stats": { "tests": 2, "passes": 0, "failures": 2 },
+  "results": [
+    {
+      "file": "cypress/e2e/menu.cy.ts",
+      "suites": [
+        {
+          "title": "navigation menu",
+          "tests": [
+            {
+              "title": "opens the dropdown",
+              "fullTitle": "navigation menu opens the dropdown",
+              "pass": false,
+              "pending": false,
+              "duration": 5100,
+              "err": { "message": "CypressError: element is detached from the DOM. Retried for 4000ms" }
+            },
+            {
+              "title": "creates a saved view",
+              "fullTitle": "navigation menu creates a saved view",
+              "pass": false,
+              "pending": false,
+              "duration": 1300,
+              "err": { "message": "Error: duplicate key value violates unique constraint \"views_name_key\"" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

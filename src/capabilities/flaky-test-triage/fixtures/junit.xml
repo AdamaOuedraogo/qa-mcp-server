@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A JUnit report is another source of observation. JUnit does not natively model
+  retries as separate attempts, so intermittency for these must come from
+  cross-run history. A JUnit adapter is a documented extension point; see
+  ../adapters.ts and ../docs/reasoning.md.
+-->
+<testsuites name="e2e" tests="2" failures="2">
+  <testsuite name="api.spec.ts" tests="2" failures="2" time="12.4">
+    <testcase classname="api" name="loads dashboard" time="6.1">
+      <failure type="Error" message="request failed: ECONNREFUSED 127.0.0.1:5432">
+        Error: connect ECONNREFUSED 127.0.0.1:5432
+      </failure>
+    </testcase>
+    <testcase classname="api" name="renders 503 gracefully" time="6.3">
+      <failure type="Error" message="Received status 503 from upstream service">
+        Error: net::ERR_HTTP_RESPONSE_CODE_FAILURE 503
+      </failure>
+    </testcase>
+  </testsuite>
+</testsuites>

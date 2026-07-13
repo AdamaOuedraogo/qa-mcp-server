@@ -21,6 +21,7 @@ Instead of exposing a generic terminal, the server exposes purpose-built, typed 
 * [Why this project exists](#why-this-project-exists)
 * [Current MVP](#current-mvp)
 * [Getting Started](#getting-started)
+* [Connect it to your project](#connect-it-to-your-project)
 * [Real execution (opt-in)](#real-execution-opt-in)
 * [Architecture](#architecture)
 * [Why not a Terminal?](#why-not-a-terminal)
@@ -153,6 +154,47 @@ It opens a local web UI where you can:
 2. **Resources** → read `qa://test-strategy` and `qa://playwright-guidelines`.
 3. **Prompts** → render `generate-playwright-test` with a sample user story.
 
+## Connect it to your project
+
+To run a real project's tests and use the QA capabilities from your MCP client,
+point the server at that project. There are two ways to wire it up — pick one:
+
+- **Method A — project-scoped `.mcp.json`** (recommended, versionable): drop a
+  `.mcp.json` at the root of the project you want to test.
+
+  ```json
+  {
+    "mcpServers": {
+      "qa": {
+        "command": "node",
+        "args": ["/absolute/path/to/qa-mcp-server/dist/index.js"],
+        "env": {
+          "QA_MCP_EXECUTION_MODE": "live",
+          "QA_MCP_PROJECT_DIR": "/absolute/path/to/your/test-project",
+          "QA_MCP_BASE_URL_LOCAL": "http://localhost:3000"
+        }
+      }
+    }
+  }
+  ```
+
+- **Method B — CLI / client config**: register it directly, e.g. with Claude Code:
+
+  ```bash
+  cd /absolute/path/to/your/test-project
+  claude mcp add qa -s project \
+    --env QA_MCP_EXECUTION_MODE=live \
+    --env QA_MCP_PROJECT_DIR=/absolute/path/to/your/test-project \
+    -- node /absolute/path/to/qa-mcp-server/dist/index.js
+  ```
+
+`QA_MCP_PROJECT_DIR` must be the directory that holds the test config
+(`playwright.config.ts`, `cypress.config.ts`, …) — if tests live in a `testing/`
+subfolder, point at that subfolder, not the repo root.
+
+Full step-by-step (Claude Desktop config, verification, flaky-triage usage, and
+safety notes) is in **[Connect to a project](docs/connect-to-a-project.md)**.
+
 ## Real execution (opt-in)
 
 By default the run tools are **dry-run** and execute nothing. Real execution is
@@ -210,11 +252,30 @@ environment but can never define what it points to:
 Because `environment` is validated against the enum, arbitrary values (e.g. an
 injected URL or shell fragment) are rejected before the handler runs.
 
+### Non-default project layouts
+
+Real projects don't always use the default command shape. A Cypress project may
+keep its config in a custom file, require `--e2e`, or read project-specific
+environment variables; a Playwright project may use a non-default config file.
+So the server can plug into **any** project, these details are supplied by the
+**operator** (never the caller) through environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `QA_MCP_CYPRESS_CONFIG_FILE` | Adds `--config-file <path>` |
+| `QA_MCP_CYPRESS_E2E` | Adds `--e2e` when truthy (`1`/`true`/`yes`/`on`) |
+| `QA_MCP_CYPRESS_PROJECT` | Injects `PROJECT=<value>` into the child env |
+| `QA_MCP_CYPRESS_ENV_VAR` | Injects the **selected** environment name into this env var (e.g. `ENVIRONMENT`) |
+| `QA_MCP_PLAYWRIGHT_CONFIG_FILE` | Adds `--config <path>` |
+
+The caller still only picks typed parameters and closed enums; these values are
+passed as discrete argv entries or child env, never interpolated into a shell
+string. See [Connect to a project](docs/connect-to-a-project.md) for a worked
+example (a Cucumber/hybrid Cypress project).
+
 ---
 
 # Architecture
-
-![Agentic direction for qa-mcp-server](docs/assets/agentic-direction.svg)
 
 The server acts as a controlled bridge between an AI assistant and the Quality Engineering ecosystem.
 
@@ -344,6 +405,7 @@ If you have ideas for QA workflows that could help AI assistants become better Q
 More detail lives in the dedicated documents:
 
 * [Vision](docs/vision.md) — project philosophy and Agentic Quality Engineering
+* [Connect to a project](docs/connect-to-a-project.md) — wire the server to a real test project (both methods)
 * [Architecture](docs/architecture.md) — how tools, resources and prompts are wired
 * [Roadmap](ROADMAP.md) — planned evolution and non-goals
 * [Contributing](CONTRIBUTING.md) — how to propose QA workflows and changes

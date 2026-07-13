@@ -1,0 +1,37 @@
+{
+  "config": { "version": "1.44.0" },
+  "suites": [
+    {
+      "title": "checkout",
+      "file": "checkout.spec.ts",
+      "specs": [
+        {
+          "title": "completes an order",
+          "tests": [
+            {
+              "results": [
+                {
+                  "status": "timedOut",
+                  "duration": 30000,
+                  "error": { "message": "TimeoutError: Timeout 30000ms exceeded waiting for selector '#pay-button'" }
+                },
+                { "status": "passed", "duration": 4200 }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "shows correct total",
+          "tests": [
+            {
+              "results": [
+                { "status": "failed", "duration": 900, "error": { "message": "AssertionError: expected 42 to equal 40" } },
+                { "status": "failed", "duration": 880, "error": { "message": "AssertionError: expected 42 to equal 40" } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

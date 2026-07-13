@@ -10,6 +10,9 @@ import { registerPlaywrightGuidelines } from "./resources/playwrightGuidelines.j
 import { registerGeneratePlaywrightTest } from "./prompts/generatePlaywrightTest.js";
 import { registerAnalyzeTestFailure } from "./prompts/analyzeTestFailure.js";
 
+import { registerTriageFlakyTest } from "./capabilities/flaky-test-triage/tool.js";
+import { registerFlakyTestTriagePrompt } from "./capabilities/flaky-test-triage/prompts/flakyTestTriage.js";
+
 /**
  * Build the QA MCP server and register all capabilities.
  *
@@ -28,6 +31,9 @@ export function createServer(): McpServer {
   registerRunCypressTest(server);
   registerReadTestReport(server);
 
+  // Capabilities (executable QA expertise — judgment, not data).
+  registerTriageFlakyTest(server);
+
   // Resources (reference material an agent can read).
   registerTestStrategy(server);
   registerPlaywrightGuidelines(server);
@@ -35,6 +41,7 @@ export function createServer(): McpServer {
   // Prompts (reusable QA workflows).
   registerGeneratePlaywrightTest(server);
   registerAnalyzeTestFailure(server);
+  registerFlakyTestTriagePrompt(server);
 
   return server;
 }
