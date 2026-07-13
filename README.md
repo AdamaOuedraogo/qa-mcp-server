@@ -277,8 +277,6 @@ example (a Cucumber/hybrid Cypress project).
 
 # Architecture
 
-![Agentic direction for qa-mcp-server](docs/assets/agentic-direction.svg)
-
 The server acts as a controlled bridge between an AI assistant and the Quality Engineering ecosystem.
 
 ---
