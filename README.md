@@ -390,6 +390,12 @@ The repository therefore serves two purposes:
 
 → Read the full [Vision document](docs/vision.md).
 
+**Who builds this.** Adama Ouedraogo — Staff QA Automation Engineer, 18+ years in software quality,
+former QA Staff Engineer at Aircall. This is the flagship of a connected ecosystem: it encodes that
+QA expertise as open-source AI capabilities. Positioning and strategy are orchestrated in Adama OS;
+learning-in-public happens in the [Agentic Quality Lab](https://github.com/AdamaOuedraogo/agentic-quality-lab),
+and everything is showcased at [adamaouedraogo.github.io](https://adamaouedraogo.github.io).
+
 ---
 
 # Contributing
