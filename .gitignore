@@ -20,7 +20,7 @@ pnpm-debug.log*
 .vscode/
 
 # Local agent / assistant instructions (not for the public repo)
-CLAUDE.md
+CLAUDE.local.md
 
 # Test artifacts
 test-results/
