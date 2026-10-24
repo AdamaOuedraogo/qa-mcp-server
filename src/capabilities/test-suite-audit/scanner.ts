@@ -119,7 +119,18 @@ const PAGE_OBJECT_IMPORT = [
   /\bimport\s*{[^}]*\btest\b[^}]*}\s*from\s+['"`]\.{1,2}\//, // custom fixture-based test
 ];
 const PRIORITY_TAG = /@(p[0-3]|smoke|sanity|critical|regression|nightly|slow|wip)\b/gi;
-const ASSERTION = [/\bexpect\s*\(/, /\.should\s*\(/, /\bassert\b/, /\.toMatchSnapshot\s*\(/];
+// Inline assertions, plus calls to helpers whose *name* says they assert
+// (`verifyTotal()`, `assertLoggedIn()`, `checkoutPage.shouldShowError()`).
+// This is a heuristic: a helper named `confirmOrder()` that asserts inside
+// is still missed, and the finding it feeds (COV-004) says so.
+const ASSERTION = [
+  /\bexpect\s*\(/,
+  /\.should\s*\(/,
+  /\bassert\b/,
+  /\.toMatchSnapshot\s*\(/,
+  /\b(assert|verify|check|validate|expect|should)[A-Z_]\w*\s*\(/,
+  /\.(assert|verify|check|validate|expect|should)[A-Z_]?\w*\s*\(/,
+];
 
 function matchAny(line: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(line));
@@ -261,26 +272,49 @@ export function analyseRunnerConfig(configFile: string | undefined, source: stri
   };
 }
 
+/** Strip YAML comments so a commented-out job or a `# TODO: add playwright` line is not evidence. */
+function stripYamlComments(src: string): string {
+  return src
+    .split(/\r?\n/)
+    .map((l) => l.replace(/(^|\s)#.*$/, ""))
+    .join("\n");
+}
+
+// A job that actually *runs* E2E tests, not one that merely mentions a tool
+// (an `image: mcr.microsoft.com/playwright` line, a cache key, a comment).
+const E2E_RUN_COMMAND = [
+  /\b(npx|pnpm|yarn|bunx?)\s+(dlx\s+)?playwright\s+test\b/i,
+  /\bplaywright\s+test\b/i,
+  /\b(npx|pnpm|yarn|bunx?)\s+(dlx\s+)?cypress\s+run\b/i,
+  /\bcypress\s+run\b/i,
+  /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test:)?(e2e|playwright|cypress|ui)(:[\w-]+)?\b/i,
+  /\buses:\s*cypress-io\/github-action/i,
+];
+
 /** Read the CI definition(s). Pure. */
 export function analyseCi(files: Array<{ path: string; source: string }>): CiObservation {
   if (files.length === 0) {
     return { provider: "none", files: [], e2eJobPresent: false };
   }
-  const all = files.map((f) => f.source).join("\n");
+  const all = files.map((f) => stripYamlComments(f.source)).join("\n");
   const gitlab = files.some((f) => basename(f.path) === ".gitlab-ci.yml");
   const github = files.some((f) => f.path.includes(".github/workflows"));
-  const e2e = /\b(playwright|cypress)\b/i.test(all);
+  const e2e = matchAny(all, E2E_RUN_COMMAND);
+  if (!e2e) {
+    // No run command: say what we did *not* observe rather than guessing at gates.
+    return { provider: gitlab ? "gitlab" : github ? "github" : "other", files: files.map((f) => f.path), e2eJobPresent: false };
+  }
   return {
     provider: gitlab ? "gitlab" : github ? "github" : "other",
     files: files.map((f) => f.path),
-    e2eJobPresent: e2e,
-    runsOnMergeRequest: bool(/merge_request|pull_request|CI_MERGE_REQUEST|CI_PIPELINE_SOURCE/i, all),
-    scheduledRun: bool(/schedule|nightly|cron/i, all),
-    artifactsPublished: bool(/artifacts\s*:|upload-artifact/i, all),
-    junitReportWired: bool(/junit\s*:|reports\s*:\s*\n?\s*junit|junit\.xml/i, all),
-    parallelOrSharded: bool(/parallel\s*:|--shard|matrix\s*:|shard/i, all),
-    blanketJobRetry: bool(/^\s*retry\s*:\s*[12]\b|retry:\s*\n\s*max\s*:\s*[12]/m, all),
-    dependencyCache: bool(/cache\s*:|actions\/cache|setup-node[\s\S]{0,200}cache/i, all),
+    e2eJobPresent: true,
+    runsOnMergeRequest: bool(/merge_request_event|merge_requests\b|pull_request\b|CI_MERGE_REQUEST_IID/i, all),
+    scheduledRun: bool(/CI_PIPELINE_SOURCE\s*==\s*["']schedule["']|^\s*schedule\s*:|^\s*-\s*cron\s*:|\bschedules\b/im, all),
+    artifactsPublished: bool(/^\s*artifacts\s*:|uses:\s*actions\/upload-artifact/im, all),
+    junitReportWired: bool(/^\s*junit\s*:|reports\s*:\s*\n?\s*junit|junit\.xml|junit-report/im, all),
+    parallelOrSharded: bool(/^\s*parallel\s*:|--shard[= ]|^\s*matrix\s*:|\$\{\{\s*matrix\./im, all),
+    blanketJobRetry: bool(/^\s*retry\s*:\s*[12]\b|^\s*retry\s*:\s*\n\s*max\s*:\s*[12]\b/m, all),
+    dependencyCache: bool(/^\s*cache\s*:|uses:\s*actions\/cache|cache:\s*['"]?(npm|pnpm|yarn)/im, all),
   };
 }
 
@@ -451,6 +485,7 @@ export async function scanProject(root: string, options: ScanOptions = {}): Prom
     pageObjectsDir: found.pageObjectsDir,
     fixturesOrSeedDir: found.fixturesDir,
     frameworkVersion: deps["@playwright/test"] ?? deps["playwright"] ?? deps["cypress"],
+    packageJsonFound: Boolean(found.packageJson) && Object.keys(pkg).length > 0,
   };
 
   return {

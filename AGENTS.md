@@ -162,8 +162,16 @@ documentation updates.
 - The audited root is `QA_MCP_PROJECT_DIR` or `process.cwd()`; `path` must
   stay inside it (`resolveInside()` in `tool.ts`). Preserve the `..`,
   absolute-path and control-character rejections and the file/size caps.
-- Evidence that matches a credential pattern is masked before leaving the
-  scanner. Keep it that way; the judgment is meant to be pasted into reports.
+- Credential redaction happens at the output boundary (`redact.ts`, applied in
+  the evaluator to every snippet, path and note) so caller-supplied
+  observations are covered too. Keep it there; add shapes rather than moving it.
+- `resolveInside()` rejects malformed paths (control characters, drive/UNC
+  prefixes) rather than cleaning them. Keep rejection, not cleaning.
+- Findings carry `basis: observed | not_observed`. Rules that depend on a file
+  that was not found must not fire; report the gap (`CFG-001`, `COV-005`) with
+  `not_observed` instead. Keep `completeness` honest.
+- `analyseCi()` requires a real run command after stripping YAML comments;
+  mentions, image names and comments are not evidence of an E2E job.
 - `rules.ts` implements `docs/reasoning.md`. Change them together, with tests.
 - A static audit never awards level 4 on an axis that has findings or lacks
   positive signals. `caveats` must keep stating what static analysis cannot see.

@@ -53,15 +53,32 @@ history (`triage_flaky_test` is the capability for that).
 ## Safety
 
 - **Read-only.** It opens files; it never runs a test or a command.
-- **Confined.** It scans `QA_MCP_PROJECT_DIR` when the operator set it, else
-  the server's working directory (like `read_test_report`). The caller can
-  narrow to a sub-folder but `..`, absolute paths and control characters are
-  rejected. This is a path check, not a filesystem sandbox.
-- **Bounded.** No symlinks, vendor/build directories skipped, at most 400
-  spec files by default and 512 KiB per file; every cap hit is listed in the
-  judgment's `caveats`.
-- **No secrets in the output.** Evidence lines that match a credential
-  pattern are masked (`'***'`) before they leave the scanner.
+- **Confined (lexically).** It scans `QA_MCP_PROJECT_DIR` when the operator
+  set it, else the server's working directory (like `read_test_report`). The
+  caller can narrow to a sub-folder; `..`, absolute paths, drive/UNC prefixes
+  and control characters are rejected outright, not cleaned. The walk does not
+  follow symlinks. This is a check on the requested path, not a filesystem
+  sandbox: a root that is itself a symlink, or a bind mount, is not detected.
+- **Bounded.** Vendor/build directories skipped, at most 400 spec files by
+  default and 512 KiB per file; every cap hit is listed in the judgment's
+  `caveats` and reflected in `completeness`.
+- **Credential redaction at the output boundary.** Every evidence snippet,
+  path and note is passed through `redact.ts` in the evaluator — whether the
+  observation came from the scanner or was supplied by the caller. Lines that
+  look like they carry a credential have their quoted literals replaced by
+  `***`; bearer tokens, JWTs and common key prefixes are masked anywhere. This
+  is pattern-based: an unusual secret shape can still get through, so treat the
+  judgment as *reduced*-risk to paste, not as sanitised.
+- **Observed vs. not observed.** Each finding carries a `basis`: `observed`
+  (the smell is in the files) or `not_observed` (something expected was not
+  found at the audited root — config, CI, lockfile — and may live elsewhere).
+  Not-observed findings weigh half in scoring and never trigger the critical
+  cap. The `completeness` block says how much of the expected input the scan
+  saw, so a partial scan is not mistaken for an immature suite.
+- **Heuristic findings say so.** `COV-004` (tests without a *visible*
+  assertion) recognises inline `expect/should/assert` and calls to helpers
+  named like assertions; a helper that asserts under another name is missed.
+  Its title and severity reflect that.
 
 ## Layout
 
@@ -70,7 +87,8 @@ history (`triage_flaky_test` is the capability for that).
 | `schema.ts`          | The data contract — observation in, **judgment** out. |
 | `scanner.ts`         | Facts only: walks the project, reads specs/config/CI. No judgment. |
 | `rules.ts`           | **The expertise.** Finding rules, axis scoring, hotspot ranking, action planning. |
-| `evaluator.ts`       | Pure orchestration: `auditTestSuite(observation)`. |
+| `evaluator.ts`       | Pure orchestration: `auditTestSuite(observation)`; applies redaction and computes completeness. |
+| `redact.ts`          | Output-boundary credential masking for every snippet, path and note. |
 | `tool.ts`            | MCP exposure: the `audit_test_suite` tool and its Markdown rendering. |
 | `fixtures/`          | `sample-project/`: a small, deliberately smelly Playwright project. |
 | `tests/`             | Tests that pin the expertise and the scanner's honesty. |

@@ -22,6 +22,16 @@ we trust this suite, what is costing us the most, and what should we do first?**
    `optimized` (4) is never awarded on an axis that has findings or lacks
    positive signals: a code-only review can prove absence of smells, not
    presence of a trend.
+5. **Not observed is not absent.** A missing config or CI file at the audited
+   root may mean "it lives elsewhere". Such findings carry
+   `basis: not_observed`, weigh half in scoring, never trigger the critical
+   cap, and are summarised in `completeness`. Rules that need the config
+   (reporters, traces, retries, parallelism) do not fire when it was not
+   found; `CFG-001` reports the gap instead.
+6. **Heuristics are labelled.** Assertion detection is line-based and
+   name-based (inline `expect/should/assert`, helpers named `verify…`,
+   `assert…`, `check…`); `COV-004` says "visible assertion", is medium at
+   most, and asks the auditor to read each test before reporting it.
 5. **Never recommend hiding a failure.** No rule suggests sleeps, skips,
    weakened assertions or blanket retries. Several rules exist to flag them.
 
@@ -72,14 +82,15 @@ Cypress parallelism is a CI/cloud concern, so SPD-001 is Playwright-only.
 | COV-001 | < 50 % of specs carry a priority/scope tag (`@p0`, `@smoke`, …) | high if none, else medium — the base of a risk-based strategy |
 | COV-002 | `.skip`/`fixme`/`xit` | high ≥10, medium ≥3, else low |
 | COV-003 | `.only`/`fit`/`fdescribe` committed | **critical** — silently removes coverage on CI |
-| COV-004 | tests without `expect`/`should`/`assert` | high ≥10, else medium |
-| COV-005 | no CI definition, or CI without an E2E job | critical / high |
+| COV-004 | tests without a *visible* assertion (heuristic) | medium ≥10, else low |
+| COV-005 | no CI definition at the root (`not_observed`), or CI without a job that *runs* an E2E command | high / high |
 | COV-006 | no scheduled (nightly) run | low |
 
 ### Observability — "can anyone investigate without re-running?"
 
 | Rule | Flags | Severity logic |
 | --- | --- | --- |
+| CFG-001 | specs found but no runner config at the root (`not_observed`) | medium — and OBS-001/002, REL-004, SPD-001 stay silent |
 | OBS-001 | no JSON/JUnit/Allure/Mochawesome reporter | high — without it there is no trend and nothing for AI-assisted triage |
 | OBS-002 | trace/screenshot off (or nothing configured on Playwright) | medium |
 | OBS-003 | E2E job publishes no artifacts | medium |
@@ -93,10 +104,20 @@ Cypress parallelism is a CI/cloud concern, so SPD-001 is Playwright-only.
 | GOV-003 | no dedicated E2E script in `package.json` | low |
 | GOV-004 | no lockfile | medium |
 
+## CI detection
+
+A CI file counts as running the suite only if, after stripping YAML comments,
+it contains a run command (`playwright test`, `cypress run`, a `test:e2e`-style
+script, the Cypress GitHub action). An `image:` line, a cache key or a comment
+is not evidence. Gate, schedule, artifact and sharding signals are inferred
+only once a run command was found; otherwise they are left `undefined`
+(not observed).
+
 ## Scoring
 
 Each axis starts at 4 and deducts 3 / 1.5 / 1 / 0.5 per critical / high /
-medium / low finding, floored at 0. A critical finding caps the axis at 1. An
+medium / low finding (half of that for `not_observed` findings), floored at
+0. An *observed* critical finding caps the axis at 1. An
 axis with findings, or without positive signals, is capped at 3. The overall
 level is the mean of the axes pulled toward the minimum
 (`round((2·mean + min) / 3)`): a suite is only as trustworthy as its weakest

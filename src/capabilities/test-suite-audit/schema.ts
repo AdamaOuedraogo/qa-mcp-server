@@ -95,6 +95,7 @@ export const RepoObservationSchema = z.object({
   pageObjectsDir: z.boolean(),
   fixturesOrSeedDir: z.boolean(),
   frameworkVersion: z.string().optional(),
+  packageJsonFound: z.boolean().optional().describe("Whether a package.json was found and parsed at the root."),
 });
 export type RepoObservation = z.infer<typeof RepoObservationSchema>;
 
@@ -164,6 +165,12 @@ export const FindingSchema = z.object({
   recommendation: z.string().describe("The concrete change a senior QA would make."),
   effort: EffortSchema,
   quickWin: z.boolean().describe("Fixable inside a 2-day audit, typically in one pull request."),
+  basis: z
+    .enum(["observed", "not_observed"])
+    .describe(
+      "observed: the smell was seen in the files. not_observed: something expected was not found at the " +
+        "audited root (config, CI, lockfile…) — it may live elsewhere; verify before reporting as absent.",
+    ),
   evidence: z.array(EvidenceRefSchema).describe("file:line proof, capped."),
   occurrences: z.number().int().nonnegative().describe("Total occurrences across the suite."),
 });
@@ -215,6 +222,15 @@ export const TestSuiteAuditJudgmentSchema = z.object({
     specsWithSemanticLocators: z.number().int().nonnegative(),
     specsWithPageObjects: z.number().int().nonnegative(),
     specsWithPriorityTags: z.number().int().nonnegative(),
+  }),
+  completeness: z.object({
+    score: z.number().min(0).max(1).describe("How much of the expected input the scan actually saw (1 = everything)."),
+    specsAnalysed: z.number().int().nonnegative(),
+    specsFound: z.number().int().nonnegative(),
+    runnerConfigFound: z.boolean(),
+    ciDefinitionFound: z.boolean(),
+    packageJsonFound: z.boolean(),
+    notes: z.array(z.string()).describe("What was not observed and therefore not judged."),
   }),
   caveats: z.array(z.string()).describe("What a static audit cannot see; what to verify with the team."),
 });
