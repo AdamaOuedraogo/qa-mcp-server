@@ -72,6 +72,7 @@ const hardWaits: Rule = (obs) => {
       "Replace each sleep with a web-first assertion or an explicit wait on the condition the test actually needs (element state, network response, URL). Treat any remaining sleep as a documented exception.",
     effort: n <= 10 ? "S" : "M",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.hardWaits),
     occurrences: n,
   };
@@ -92,6 +93,7 @@ const forcedActions: Rule = (obs) => {
       "Remove the force flag and fix the underlying cause: wait for the overlay to disappear, scroll into view, or raise a product bug if the element is genuinely unreachable.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.forcedActions),
     occurrences: n,
   };
@@ -112,12 +114,14 @@ const conditionalFlow: Rule = (obs) => {
       "Make the precondition deterministic (seed data, mock the feature flag, dismiss the modal in setup) and write one straight-line test per scenario.",
     effort: "M",
     quickWin: false,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.conditionalFlow),
     occurrences: n,
   };
 };
 
 const retriesMaskFlake: Rule = (obs) => {
+  if (!obs.runnerConfig.configFile && !obs.ci.blanketJobRetry) return undefined;
   const r = obs.runnerConfig.retries;
   const blanket = obs.ci.blanketJobRetry;
   if ((r === undefined || r <= 1) && !blanket) return undefined;
@@ -136,6 +140,7 @@ const retriesMaskFlake: Rule = (obs) => {
       "Keep at most one retry on CI, emit a JSON/JUnit report that records retries, and triage every retried test (the `triage_flaky_test` capability does this). Remove job-level retry.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: obs.runnerConfig.configFile ? [{ file: obs.runnerConfig.configFile }] : [],
     occurrences: 1,
   };
@@ -157,6 +162,7 @@ const uiLoginEverywhere: Rule = (obs) => {
       "Authenticate once in a setup project (Playwright storageState) or cache the session (cy.session) and reuse it. Keep one dedicated login test.",
     effort: "M",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.uiLoginSteps),
     occurrences: n,
   };
@@ -181,6 +187,7 @@ const fragileSelectors: Rule = (obs) => {
       "Move to role/label/text locators first and `data-testid` second. Agree the test-id convention with developers and set `testIdAttribute` in the config.",
     effort: n <= 15 ? "S" : "M",
     quickWin: n <= 15,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.fragileSelectors),
     occurrences: n,
   };
@@ -201,6 +208,7 @@ const noSemanticLocators: Rule = (obs) => {
     recommendation: "Adopt a locator standard (role > label > text > test-id > CSS) and apply it in every new or touched test; enforce it in code review.",
     effort: "M",
     quickWin: false,
+    basis: "observed",
     evidence: [],
     occurrences: obs.specs.length - with_,
   };
@@ -221,6 +229,7 @@ const noAbstraction: Rule = (obs) => {
     recommendation: "Introduce thin fixtures/page objects for the 3–5 most repeated flows (login, navigation, form submission). Keep them small: encapsulate locators and actions, not assertions.",
     effort: "M",
     quickWin: false,
+    basis: "observed",
     evidence: [],
     occurrences: obs.specs.length - with_,
   };
@@ -239,6 +248,7 @@ const hardcodedUrls: Rule = (obs) => {
     recommendation: "Use relative paths with a configured baseURL per environment (an env var or a project per target).",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.hardcodedUrls),
     occurrences: n,
   };
@@ -257,6 +267,7 @@ const largeSpecs: Rule = (obs) => {
     recommendation: "Split by user journey or feature; move shared setup to fixtures. Target one journey per file.",
     effort: "M",
     quickWin: false,
+    basis: "observed",
     evidence: big.slice(0, MAX_EVIDENCE).map((s) => ({ file: s.path, snippet: `${s.lines} lines, ${s.tests} tests` })),
     occurrences: big.length,
   };
@@ -274,6 +285,7 @@ const noTypeSafety: Rule = (obs) => {
       recommendation: "Migrate incrementally to TypeScript (rename + minimal types first), starting with shared modules.",
       effort: "L",
       quickWin: false,
+      basis: "observed",
       evidence: [],
       occurrences: 1,
     };
@@ -289,6 +301,7 @@ const noTypeSafety: Rule = (obs) => {
       recommendation: "Enable `strict` for the test project; fix errors file by file.",
       effort: "S",
       quickWin: true,
+      basis: "observed",
       evidence: [{ file: "tsconfig.json" }],
       occurrences: 1,
     };
@@ -308,6 +321,7 @@ const noLint: Rule = (obs) => {
     recommendation: "Add ESLint with the Playwright (or Cypress) plugin and the `no-floating-promises` rule; run it in CI.",
     effort: "S",
     quickWin: true,
+    basis: "not_observed",
     evidence: [],
     occurrences: 1,
   };
@@ -316,7 +330,7 @@ const noLint: Rule = (obs) => {
 // --- Feedback speed ----------------------------------------------------------
 
 const noParallelism: Rule = (obs) => {
-  if (obs.framework === "cypress") return undefined; // Cypress parallelism is a cloud/CI concern (handled by SPD-002)
+  if (obs.framework === "cypress" || !obs.runnerConfig.configFile) return undefined; // Cypress parallelism is a cloud/CI concern (handled by SPD-002)
   const { fullyParallel, workers } = obs.runnerConfig;
   if (fullyParallel || (typeof workers === "number" && workers > 1) || typeof workers === "string") return undefined;
   if (obs.specs.length < 10) return undefined;
@@ -330,6 +344,7 @@ const noParallelism: Rule = (obs) => {
     recommendation: "Enable fullyParallel, make tests independent (own data, no shared order), then shard across CI jobs.",
     effort: "M",
     quickWin: false,
+    basis: "observed",
     evidence: obs.runnerConfig.configFile ? [{ file: obs.runnerConfig.configFile }] : [],
     occurrences: 1,
   };
@@ -348,6 +363,7 @@ const ciNotSharded: Rule = (obs) => {
     recommendation: "Shard the E2E job (GitLab `parallel:` + `--shard`, or a GitHub matrix) and merge reports afterwards.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: obs.ci.files.map((f) => ({ file: f })),
     occurrences: 1,
   };
@@ -365,6 +381,7 @@ const noCiCache: Rule = (obs) => {
     recommendation: "Cache the package-manager store and the browser binaries (or use the official Playwright/Cypress image).",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: obs.ci.files.map((f) => ({ file: f })),
     occurrences: 1,
   };
@@ -389,6 +406,7 @@ const noPrioritisation: Rule = (obs) => {
       "Classify journeys by business risk (P0 = revenue/compliance/auth, P1, P2), tag the tests, and wire the CI gate to the P0 subset. This is the foundation of a risk-based strategy.",
     effort: "M",
     quickWin: false,
+    basis: "observed",
     evidence: [],
     occurrences: obs.specs.length - tagged,
   };
@@ -407,6 +425,7 @@ const skippedTests: Rule = (obs) => {
     recommendation: "Triage every skip: delete, fix, or link it to a ticket with an expiry. Add a CI check that fails on skips without a reason.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.skippedTests),
     occurrences: n,
   };
@@ -425,6 +444,7 @@ const focusedTests: Rule = (obs) => {
     recommendation: "Remove the markers now; add `forbidOnly: !!process.env.CI` (Playwright) or an ESLint rule so it cannot recur.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.focusedTests),
     occurrences: n,
   };
@@ -434,17 +454,22 @@ const noAssertions: Rule = (obs) => {
   const n = obs.specs.reduce((a, s) => a + s.testsWithoutAssertion, 0);
   if (n === 0) return undefined;
   const files = obs.specs.filter((s) => s.testsWithoutAssertion > 0);
+  // Heuristic by construction: the scanner sees inline expect/should/assert and
+  // calls to helpers *named* like assertions. A helper that asserts under
+  // another name is invisible, so this is "no visible assertion", never
+  // "missing coverage", and its severity stays below the deterministic rules.
   return {
     id: "COV-004",
     axis: "coverage_and_risk",
-    severity: n >= 10 ? "high" : "medium",
-    title: "Tests without an explicit assertion",
-    observation: `${n} test(s) in ${files.length} file(s) contain no expect/should/assert.`,
+    severity: n >= 10 ? "medium" : "low",
+    title: "Tests without a visible assertion (heuristic)",
+    observation: `${n} test(s) in ${files.length} file(s) contain no inline expect/should/assert and no call to an assertion-named helper. Heuristic: open each one before reporting it.`,
     impact: "A test that only navigates and clicks proves nothing about the product; it passes as long as nothing throws.",
-    recommendation: "Add an assertion on the user-visible outcome of each journey; delete tests that have none to assert.",
+    recommendation: "Confirm by reading the test; if it truly asserts nothing, add an assertion on the user-visible outcome or delete it. If it asserts inside a helper, name the helper so intent is visible (verify…, assert…).",
     effort: "S",
     quickWin: true,
-    evidence: files.slice(0, MAX_EVIDENCE).map((s) => ({ file: s.path, snippet: `${s.testsWithoutAssertion} test(s) without assertion` })),
+    basis: "observed",
+    evidence: files.slice(0, MAX_EVIDENCE).map((s) => ({ file: s.path, snippet: `${s.testsWithoutAssertion} test(s) without a visible assertion` })),
     occurrences: n,
   };
 };
@@ -454,13 +479,14 @@ const noCiGate: Rule = (obs) => {
     return {
       id: "COV-005",
       axis: "coverage_and_risk",
-      severity: "critical",
-      title: "No CI definition found",
-      observation: "No .gitlab-ci.yml or GitHub workflow at the audited root.",
-      impact: "Tests that only run on a laptop are documentation, not a quality gate.",
-      recommendation: "Add a pipeline that runs the critical subset on every merge request and the full suite nightly.",
+      severity: "high",
+      title: "No CI definition found at the audited root",
+      observation: "No .gitlab-ci.yml or GitHub workflow at or below the audited root. The pipeline may be defined in a parent repository or another CI system.",
+      impact: "If the suite really has no CI gate, tests that only run on a laptop are documentation, not a quality gate.",
+      recommendation: "Confirm where (and whether) the suite runs in CI. If nowhere: add a pipeline that runs the critical subset on every merge request and the full suite nightly.",
       effort: "M",
       quickWin: false,
+      basis: "not_observed",
       evidence: [],
       occurrences: 1,
     };
@@ -470,12 +496,13 @@ const noCiGate: Rule = (obs) => {
       id: "COV-005",
       axis: "coverage_and_risk",
       severity: "high",
-      title: "E2E tests are not run by CI",
-      observation: `CI files found (${obs.ci.files.join(", ")}) but no job references Playwright or Cypress.`,
+      title: "No CI job runs the E2E suite",
+      observation: `CI files found (${obs.ci.files.join(", ")}) but no job runs a Playwright/Cypress command (comments and image names are ignored).`,
       impact: "The suite does not protect releases: regressions are found by users, not by the pipeline.",
       recommendation: "Add an E2E job on merge requests (critical subset) and a scheduled full run.",
       effort: "M",
       quickWin: false,
+      basis: "observed",
       evidence: obs.ci.files.map((f) => ({ file: f })),
       occurrences: 1,
     };
@@ -491,6 +518,7 @@ const noCiGate: Rule = (obs) => {
       recommendation: "Schedule a nightly full run against staging and review its trend weekly.",
       effort: "S",
       quickWin: true,
+      basis: "observed",
       evidence: obs.ci.files.map((f) => ({ file: f })),
       occurrences: 1,
     };
@@ -501,6 +529,7 @@ const noCiGate: Rule = (obs) => {
 // --- Observability -----------------------------------------------------------
 
 const noMachineReport: Rule = (obs) => {
+  if (!obs.runnerConfig.configFile) return undefined; // not observed — see CFG-001
   const r = obs.runnerConfig.reporters;
   const machine = r.some((x) => /json|junit|allure|mochawesome|blob/.test(x));
   if (machine) return undefined;
@@ -515,12 +544,14 @@ const noMachineReport: Rule = (obs) => {
     recommendation: "Add `json` and `junit` reporters (keep `html` for humans), publish them as CI artifacts, and feed JUnit to the CI test tab.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: obs.runnerConfig.configFile ? [{ file: obs.runnerConfig.configFile }] : [],
     occurrences: 1,
   };
 };
 
 const noFailureArtifacts: Rule = (obs) => {
+  if (!obs.runnerConfig.configFile) return undefined; // not observed — see CFG-001
   const { traceOnFailure, screenshotOnFailure, videoOnFailure } = obs.runnerConfig;
   const pw = obs.framework !== "cypress";
   const missing: string[] = [];
@@ -540,6 +571,7 @@ const noFailureArtifacts: Rule = (obs) => {
       : "Keep screenshotOnRunFailure on; enable video only on CI and only for failing specs if the plan allows.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: obs.runnerConfig.configFile ? [{ file: obs.runnerConfig.configFile }] : [],
     occurrences: 1,
   };
@@ -557,6 +589,7 @@ const artifactsNotPublished: Rule = (obs) => {
     recommendation: "Publish the report folder and traces as job artifacts (with `when: always`) and wire the JUnit file to the test tab.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: obs.ci.files.map((f) => ({ file: f })),
     occurrences: 1,
   };
@@ -577,6 +610,7 @@ const secrets: Rule = (obs) => {
     recommendation: "Move credentials to CI variables / a secret store, load them via env, and rotate the exposed ones.",
     effort: "S",
     quickWin: true,
+    basis: "observed",
     evidence: evidenceFrom(obs.specs, (s) => s.hardcodedSecrets),
     occurrences: n,
   };
@@ -594,6 +628,7 @@ const noDocs: Rule = (obs) => {
     recommendation: "Write a one-page testing guide: how to run locally, locator and naming conventions, how to tag priorities, what to do with a flaky test.",
     effort: "S",
     quickWin: true,
+    basis: "not_observed",
     evidence: [],
     occurrences: 1,
   };
@@ -611,6 +646,7 @@ const noE2eScript: Rule = (obs) => {
     recommendation: "Add `test:e2e` (and `test:e2e:critical`) scripts used identically by developers and CI.",
     effort: "S",
     quickWin: true,
+    basis: "not_observed",
     evidence: [],
     occurrences: 1,
   };
@@ -628,6 +664,25 @@ const noLockfile: Rule = (obs) => {
     recommendation: "Commit the lockfile and pin the Playwright/Cypress version to the CI image.",
     effort: "S",
     quickWin: true,
+    basis: "not_observed",
+    evidence: [],
+    occurrences: 1,
+  };
+};
+
+const noRunnerConfig: Rule = (obs) => {
+  if (obs.runnerConfig.configFile || obs.specs.length === 0) return undefined;
+  return {
+    id: "CFG-001",
+    axis: "observability",
+    severity: "medium",
+    title: "Runner configuration not found at the audited root",
+    observation: `${obs.specs.length} spec file(s) found but no playwright.config/cypress.config at or below the root.`,
+    impact: "Retries, reporters, traces and parallelism could not be judged. They may be configured elsewhere (a parent directory, a shared package) or not at all.",
+    recommendation: "Point the audit at the directory that holds the test config, or confirm with the team where the runner is configured.",
+    effort: "S",
+    quickWin: false,
+    basis: "not_observed",
     evidence: [],
     occurrences: 1,
   };
@@ -645,6 +700,7 @@ const noSpecs: Rule = (obs) => {
     recommendation: "Point the audit at the directory holding the test config, or start with a critical-journey prototype.",
     effort: "S",
     quickWin: false,
+    basis: "observed",
     evidence: [],
     occurrences: 1,
   };
@@ -652,6 +708,7 @@ const noSpecs: Rule = (obs) => {
 
 export const RULES: Rule[] = [
   noSpecs,
+  noRunnerConfig,
   focusedTests,
   secrets,
   noCiGate,
@@ -709,8 +766,11 @@ export function scoreAxes(obs: TestSuiteObservation, findings: Finding[]): AxisS
   const deduction: Record<Severity, number> = { critical: 3, high: 1.5, medium: 1, low: 0.5 };
   return AXES.map((axis) => {
     const mine = findings.filter((f) => f.axis === axis);
-    let score = 4 - mine.reduce((a, f) => a + deduction[f.severity], 0);
-    if (mine.some((f) => f.severity === "critical")) score = Math.min(score, 1);
+    // A smell seen in the files counts fully; something merely not found at the
+    // audited root counts half — it may exist elsewhere, and the completeness
+    // block tells the reader to check.
+    let score = 4 - mine.reduce((a, f) => a + deduction[f.severity] * (f.basis === "observed" ? 1 : 0.5), 0);
+    if (mine.some((f) => f.severity === "critical" && f.basis === "observed")) score = Math.min(score, 1);
     // "Optimized" needs run data and a trend; a static audit awards it only when
     // there is nothing to report *and* the positive signals are all present.
     if (mine.length > 0 || !positiveSignal(obs, axis)) score = Math.min(score, 3);
@@ -782,7 +842,7 @@ export function rankHotspots(specs: SpecObservation[], limit = 10): Hotspot[] {
     }
     if (s.testsWithoutAssertion) {
       score += s.testsWithoutAssertion * 2;
-      reasons.push(`${s.testsWithoutAssertion} test(s) without assertion`);
+      reasons.push(`${s.testsWithoutAssertion} test(s) without visible assertion`);
     }
     if (score > 0) ranked.push({ path: s.path, score: Math.round(score * 10) / 10, reasons });
   }

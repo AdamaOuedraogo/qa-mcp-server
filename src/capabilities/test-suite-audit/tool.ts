@@ -78,13 +78,26 @@ export function registerAuditTestSuite(server: McpServer): void {
   );
 }
 
-/** Resolve `sub` under `root`; undefined if it is absolute or escapes. */
+/**
+ * Resolve `sub` under `root`; undefined if it is malformed, absolute or escapes.
+ *
+ * Malformed input (control characters, NUL, a Windows drive prefix) is
+ * rejected outright rather than cleaned: a caller that sends `tests\u0000/..`
+ * is not making a typo. This is a lexical check on the requested path — the
+ * scanner additionally refuses to follow symlinks — not a filesystem sandbox.
+ */
 export function resolveInside(root: string, sub: string | undefined): string | undefined {
-  if (!sub || sub.trim() === "" || sub.trim() === ".") return resolve(root);
-  const cleaned = sub.replace(/[\u0000-\u001f]/g, "").trim();
-  if (isAbsolute(cleaned) || cleaned.split(/[\\/]/).includes("..")) return undefined;
-  const abs = resolve(root, cleaned);
-  const rel = relative(resolve(root), abs);
+  const base = resolve(root);
+  if (sub === undefined) return base;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(sub)) return undefined;
+  const trimmed = sub.trim();
+  if (trimmed === "" || trimmed === ".") return base;
+  if (isAbsolute(trimmed) || /^[a-zA-Z]:/.test(trimmed) || trimmed.startsWith("\\\\")) return undefined;
+  if (trimmed.split(/[\\/]/).includes("..")) return undefined;
+  const abs = resolve(base, trimmed);
+  const rel = relative(base, abs);
+  if (rel === "" ) return abs;
   if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
   return abs;
 }
@@ -106,6 +119,9 @@ export function render(j: TestSuiteAuditJudgment, rootNote: string): string {
     "",
     rootNote,
     "",
+    `**Scan completeness:** ${Math.round(j.completeness.score * 100)}% — ${j.completeness.specsAnalysed}/${j.completeness.specsFound} specs analysed, runner config ${j.completeness.runnerConfigFound ? "found" : "not found"}, CI ${j.completeness.ciDefinitionFound ? "found" : "not found"}, package.json ${j.completeness.packageJsonFound ? "found" : "not found"}.` +
+      (j.completeness.notes.length ? ` Not judged: ${j.completeness.notes.join("; ")}.` : ""),
+    "",
     "## Maturity by axis (0 absent · 1 ad hoc · 2 defined · 3 managed · 4 optimized)",
     "",
     "| Axis | Level | Why |",
@@ -117,7 +133,10 @@ export function render(j: TestSuiteAuditJudgment, rootNote: string): string {
   ];
   for (const f of j.findings) {
     lines.push(`### ${SEVERITY_ICON[f.severity]} ${f.id} · ${f.title}${f.quickWin ? " ⚡" : ""}`);
-    lines.push(`- **Axis:** ${f.axis.replace(/_/g, " ")} · **Severity:** ${f.severity} · **Effort:** ${f.effort}`);
+    lines.push(
+      `- **Axis:** ${f.axis.replace(/_/g, " ")} · **Severity:** ${f.severity} · **Effort:** ${f.effort}` +
+        (f.basis === "not_observed" ? " · **Basis:** not observed at the audited root — verify before reporting as absent" : ""),
+    );
     lines.push(`- **Observed:** ${f.observation}`);
     lines.push(`- **Impact:** ${f.impact}`);
     lines.push(`- **Recommendation:** ${f.recommendation}`);

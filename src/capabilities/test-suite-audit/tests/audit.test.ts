@@ -231,3 +231,179 @@ test("resolveInside confines the audit to the configured root", () => {
   assert.equal(resolveInside(root, "tests/../../etc"), undefined);
   assert.equal(resolveInside(root, "/etc"), undefined);
 });
+
+// --- Review regressions (PR #3) ---------------------------------------------
+
+test("assertion detection: nested callbacks, helper assertions and one-liners", () => {
+  const src = [
+    `import { test, expect } from "@playwright/test";`,
+    `import { CheckoutPage } from "./pages/checkout.page";`,
+    `test("nested callback still asserts", async ({ page }) => {`,
+    `  await page.route("**/api", (route) => { route.fulfill({ status: 200 }); });`,
+    `  await page.getByRole("button").click();`,
+    `  await expect(page.getByText("ok")).toBeVisible();`,
+    `});`,
+    `test("asserts through a named helper", async ({ page }) => {`,
+    `  const checkout = new CheckoutPage(page);`,
+    `  await checkout.verifyTotal(42);`,
+    `});`,
+    `test("one-liner with expect", async ({ page }) => { await expect(page).toHaveURL(/cart/); });`,
+    `test("one-liner without assertion", async ({ page }) => { await page.goto("/"); });`,
+    `test("helper named like an action is not an assertion", async ({ page }) => {`,
+    `  const checkout = new CheckoutPage(page);`,
+    `  await checkout.confirmOrder();`,
+    `});`,
+  ].join("\n");
+  const s = analyseSpec("tests/assertions.spec.ts", src);
+  assert.equal(s.tests, 5);
+  // Only the two tests that visibly assert nothing are counted; the limitation
+  // (confirmOrder() may assert inside) is why COV-004 is labelled a heuristic.
+  assert.equal(s.testsWithoutAssertion, 2);
+});
+
+test("COV-004 is labelled heuristic and stays below the deterministic rules", async () => {
+  const obs = await scanProject(SAMPLE);
+  const f = auditTestSuite(obs).findings.find((x) => x.id === "COV-004")!;
+  assert.match(f.title, /heuristic/i);
+  assert.ok(f.severity === "low" || f.severity === "medium");
+  assert.equal(f.basis, "observed");
+});
+
+test("a caller-supplied observation cannot leak secrets through the judgment", () => {
+  const spec = (over: Partial<TestSuiteObservation["specs"][number]>) => ({
+    path: "tests/x.spec.ts",
+    lines: 10,
+    tests: 1,
+    hardWaits: [],
+    focusedTests: [],
+    skippedTests: [],
+    forcedActions: [],
+    fragileSelectors: [],
+    conditionalFlow: [],
+    hardcodedSecrets: [],
+    hardcodedUrls: [],
+    uiLoginSteps: [],
+    testsWithoutAssertion: 0,
+    usesSemanticLocators: true,
+    usesPageObjectOrFixture: true,
+    priorityTags: ["@p0"],
+    ...over,
+  });
+  const obs: TestSuiteObservation = {
+    framework: "playwright",
+    specs: [
+      spec({
+        hardcodedSecrets: [{ line: 3, snippet: `const token = "ghp_AbCdEf1234567890xyz";` }],
+        hardWaits: [{ line: 4, snippet: `await page.waitForTimeout(500); // password: "hunter22hunter"` }],
+        uiLoginSteps: [{ line: 5, snippet: `await page.fill("#password", "Sup3rSecret!");` }],
+        fragileSelectors: [{ line: 6, snippet: `headers: { Authorization: "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijk" }` }],
+      }),
+    ],
+    totalSpecFilesFound: 1,
+    runnerConfig: { reporters: ["json"], baseUrlConfigured: true, storageStateOrSession: true, configFile: "playwright.config.ts" },
+    ci: { provider: "gitlab", files: [".gitlab-ci.yml"], e2eJobPresent: true },
+    repo: { typescript: true, lintConfigured: true, formatterConfigured: true, lockfile: true, e2eScript: true, testingReadme: true, pageObjectsDir: true, fixturesOrSeedDir: true, packageJsonFound: true },
+    scanNotes: ["token=sk-live-0123456789abcdef"],
+  };
+  const text = JSON.stringify(auditTestSuite(obs));
+  for (const leak of ["ghp_AbCdEf1234567890xyz", "hunter22hunter", "Sup3rSecret", "eyJhbGciOiJIUzI1NiJ9", "sk-live-0123456789abcdef"]) {
+    assert.ok(!text.includes(leak), `leaked: ${leak}`);
+  }
+  assert.ok(text.includes("***"));
+});
+
+test("redactLine keeps ordinary evidence intact", async () => {
+  const { redactLine } = await import("../redact.js");
+  assert.equal(redactLine(`await page.locator("div > span").click();`), `await page.locator("div > span").click();`);
+  assert.equal(redactLine(`await page.waitForTimeout(3000);`), `await page.waitForTimeout(3000);`);
+  assert.equal(redactLine(`const password = "hunter22hunter";`), `const password = "***";`);
+});
+
+test("resolveInside rejects malformed input instead of cleaning it", () => {
+  const root = "/absolute/path/to/project";
+  assert.equal(resolveInside(root, "tests\u0000/../../etc"), undefined);
+  assert.equal(resolveInside(root, "tests\n/e2e"), undefined);
+  assert.equal(resolveInside(root, "C:\\\\Windows"), undefined);
+  assert.equal(resolveInside(root, "\\\\\\\\server\\\\share"), undefined);
+  assert.equal(resolveInside(root, "  tests/e2e  "), join(root, "tests/e2e"));
+  assert.equal(resolveInside(root, "./tests/./e2e"), join(root, "tests/e2e"));
+});
+
+test("scanner does not follow symlinks and reports unreadable or truncated files", async () => {
+  const { mkdtemp, writeFile, symlink, mkdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const base = await mkdtemp(join(tmpdir(), "qa-audit-"));
+  const dir = join(base, "project");
+  const outside = join(base, "outside"); // sibling of the audited root, not under it
+  try {
+    await mkdir(join(dir, "tests"), { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(dir, "tests", "ok.spec.ts"), `test("a", async () => { expect(1).toBe(1); });`);
+    await writeFile(join(dir, "tests", "big.spec.ts"), "// " + "x".repeat(2000) + "\n" + `test("b", async () => {});`);
+    await writeFile(join(outside, "secret.spec.ts"), `test.only("escaped", async () => {});`);
+    await symlink(outside, join(dir, "tests", "linked"));
+    await symlink(join(outside, "secret.spec.ts"), join(dir, "tests", "linked.spec.ts"));
+    const obs = await scanProject(dir, { maxFileBytes: 1024 });
+    assert.deepEqual(obs.specs.map((s) => s.path).sort(), ["tests/big.spec.ts", "tests/ok.spec.ts"]);
+    assert.ok(obs.scanNotes.some((n) => n.includes("big.spec.ts") && n.includes("truncated")));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("analyseCi ignores comments, image names and manual-only mentions", () => {
+  const noJob = analyseCi([
+    {
+      path: ".gitlab-ci.yml",
+      source: `# TODO: add playwright job\nbuild:\n  image: mcr.microsoft.com/playwright:v1.48.0-jammy\n  script:\n    - npm ci\n    - npm run build\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "schedule"\n`,
+    },
+  ]);
+  assert.equal(noJob.e2eJobPresent, false);
+  assert.equal(noJob.scheduledRun, undefined, "no gate inference without a run command");
+
+  const commentedOut = analyseCi([{ path: ".github/workflows/ci.yml", source: `jobs:\n  build:\n    steps:\n      # - run: npx playwright test\n      - run: npm test\n` }]);
+  assert.equal(commentedOut.e2eJobPresent, false);
+
+  const real = analyseCi([{ path: ".github/workflows/e2e.yml", source: `on:\n  pull_request:\n  schedule:\n    - cron: "0 2 * * *"\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test --shard=\${{ matrix.shard }}\n      - uses: actions/upload-artifact@v4\n` }]);
+  assert.equal(real.e2eJobPresent, true);
+  assert.equal(real.runsOnMergeRequest, true);
+  assert.equal(real.scheduledRun, true);
+  assert.equal(real.artifactsPublished, true);
+  assert.equal(real.parallelOrSharded, true);
+
+  const script = analyseCi([{ path: ".gitlab-ci.yml", source: `e2e:\n  script:\n    - pnpm test:e2e\n` }]);
+  assert.equal(script.e2eJobPresent, true);
+});
+
+test("missing config and CI are reported as not observed, with a completeness score", async () => {
+  const { mkdtemp, writeFile, mkdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(join(tmpdir(), "qa-audit-"));
+  try {
+    await mkdir(join(dir, "tests"));
+    await writeFile(join(dir, "tests", "a.spec.ts"), `test("@p0 a", async ({ page }) => { await expect(page.getByRole("button")).toBeVisible(); });`);
+    const j = auditTestSuite(await scanProject(dir));
+    const ids = j.findings.map((f) => f.id);
+    assert.ok(ids.includes("CFG-001"), "runner config not found is its own finding");
+    assert.ok(!ids.includes("OBS-001") && !ids.includes("OBS-002") && !ids.includes("REL-004"), "config-dependent rules do not fire on an unobserved config");
+    const ci = j.findings.find((f) => f.id === "COV-005")!;
+    assert.equal(ci.basis, "not_observed");
+    assert.notEqual(ci.severity, "critical");
+    assert.ok(j.findings.filter((f) => f.basis === "not_observed").length >= 3);
+    assert.ok(j.completeness.score < 0.5, `completeness should be low, got ${j.completeness.score}`);
+    assert.equal(j.completeness.runnerConfigFound, false);
+    assert.equal(j.completeness.ciDefinitionFound, false);
+    assert.ok(j.summary.includes("completeness"));
+    // Nothing observed is critical, so no axis is capped at 1 by the critical rule.
+    assert.ok(j.findings.every((f) => f.severity !== "critical"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("sample project: completeness is full and observed smells still cap the level", async () => {
+  const j = auditTestSuite(await scanProject(SAMPLE));
+  assert.equal(j.completeness.score, 1);
+  assert.equal(j.completeness.notes.length, 0);
+  assert.ok(j.overallLevel <= 1);
+});
