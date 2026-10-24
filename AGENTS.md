@@ -34,8 +34,8 @@ implementation is correct or silently change product intent.
 src/index.ts              stdio entry point; diagnostics go to stderr
 src/server.ts             createServer(): register calls only, no logic
 src/tools/                run_playwright_test, run_cypress_test, read_test_report
-src/resources/            qa://test-strategy, qa://playwright-guidelines
-src/prompts/              generate-playwright-test, analyze-test-failure
+src/resources/            qa://test-strategy, qa://playwright-guidelines, qa://audit-rubric
+src/prompts/              generate-playwright-test, analyze-test-failure, qa-audit
 src/config.ts             execution mode, project dir, timeout (env, read per call)
 src/environments.ts       closed environment enum -> operator-provided base URL
 src/runners.ts            operator-provided Cypress/Playwright invocation details
@@ -48,6 +48,20 @@ src/capabilities/flaky-test-triage/
   adapters.ts             Playwright JSON, Mochawesome, JUnit XML -> observations
   tool.ts, prompts/       MCP exposure: triage_flaky_test, flaky-test-triage
   tests/, fixtures/, examples/, docs/reasoning.md
+src/capabilities/test-suite-audit/
+  schema.ts               observation (files/config/CI facts) in, audit judgment out
+  scanner.ts              bounded, read-only project walk; facts only, no judgment
+  rules.ts                the expertise: ~30 finding rules, axis scoring, hotspots, plan
+  evaluator.ts            pure orchestration: auditTestSuite()
+  tool.ts                 audit_test_suite; path confined to QA_MCP_PROJECT_DIR (or cwd)
+  fixtures/sample-project a deliberately smelly Playwright project (excluded from tsc)
+  tests/, docs/reasoning.md
+src/capabilities/test-strategy-assessment/
+  schema.ts               typed questionnaire (every answer accepts "unknown") in, judgment out
+  rules.ts                gap rules, question bank, scoring, service mapping, 30/60/90 plan
+  evaluator.ts            pure orchestration: assessTestStrategy()
+  tool.ts                 assess_test_strategy
+  tests/
 examples/                 sample spec; triage-report.mjs (imports from dist/)
 ```
 
@@ -140,6 +154,24 @@ documentation updates.
   server emits: no weakened or removed assertions, no skipped or disabled
   tests, no arbitrary sleeps, no blanket retries, no expected values edited to
   match wrong behavior.
+
+## Audit capabilities
+
+- `audit_test_suite` is static and read-only. It must never execute anything;
+  keep the scanner free of process spawning and of network access.
+- The audited root is `QA_MCP_PROJECT_DIR` or `process.cwd()`; `path` must
+  stay inside it (`resolveInside()` in `tool.ts`). Preserve the `..`,
+  absolute-path and control-character rejections and the file/size caps.
+- Evidence that matches a credential pattern is masked before leaving the
+  scanner. Keep it that way; the judgment is meant to be pasted into reports.
+- `rules.ts` implements `docs/reasoning.md`. Change them together, with tests.
+- A static audit never awards level 4 on an axis that has findings or lacks
+  positive signals. `caveats` must keep stating what static analysis cannot see.
+- In `assess_test_strategy`, an `unknown` answer never produces a gap; it
+  produces an open question and lowers `confidence`. Unknowns cap an axis at 2.
+- Neither capability's recommendations may suggest hiding a failure (sleeps,
+  skips, weakened assertions, blanket retries); several rules exist to flag those.
+- Both evaluators stay pure and deterministic.
 
 ## Changes and validation
 
