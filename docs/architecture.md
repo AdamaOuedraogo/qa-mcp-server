@@ -71,6 +71,18 @@ rather than executing it, keeping the server safe to connect anywhere. Live
 execution is an explicit operator opt-in that reaches this runner only through
 the execution adapter (see [Execution model](#execution-model)).
 
+### Capabilities — `src/capabilities/*`
+
+A capability is the implementation of a QA *expertise*, not a wrapper around
+a tool: a normalized observation in, a structured judgment out
+(`Raw Data -> QA Expertise -> Structured Judgment`). Each lives in its own
+folder with a `schema.ts` (the contract), `rules.ts` (the expertise), a pure
+`evaluator.ts`, a `tool.ts` that exposes it over MCP, tests that pin the
+reasoning, and a `docs/reasoning.md` spec. Three exist today:
+`flaky-test-triage` (the reference), `test-suite-audit` (read-only static
+audit of a project) and `test-strategy-assessment` (practice-level assessment
+from a questionnaire).
+
 ## Execution pipeline
 
 A tool request flows through a fixed sequence of stages:

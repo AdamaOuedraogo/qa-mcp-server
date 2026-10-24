@@ -62,11 +62,34 @@ current features** — they will be built on the primitives described in the
 | run_cypress_test    | Prepare a Cypress test run     | **Dry-run** — returns the command, does not run it |
 | read_test_report    | Read a test report from inside the project | Active — confined to `QA_MCP_PROJECT_DIR`, bounded 20,000-byte read, returned as untrusted data |
 | triage_flaky_test   | Judge a failure: flaky (infrastructure, race, data), test error, likely regression or inconclusive, with evidence | Active — pure, deterministic, no process started |
+| audit_test_suite    | Day-one audit of a Playwright/Cypress suite: maturity per axis, findings with file:line evidence, hotspots, Diagnose → Prototype → Adopt plan | Active — static, read-only, confined to `QA_MCP_PROJECT_DIR` |
+| assess_test_strategy | Assess the testing *practice* (strategy, ownership, CI gate, flaky policy, community) from a typed questionnaire; unknowns become questions | Active — pure judgment |
 
 > **Dry-run by design.** By default the run tools return the exact command they
 > *would* execute, without executing anything, so the server is safe to connect
 > anywhere. Real execution is available as an explicit opt-in — see
 > [Real execution](#real-execution-opt-in).
+
+---
+
+## QA audit capabilities
+
+Two capabilities model the first days of a quality-engineering engagement:
+
+- **`audit_test_suite`** reads the code: specs, runner config, CI, repo
+  hygiene. It returns a maturity score on six axes, ~30 findings with
+  `file:line` evidence, the hotspot files to fix first and a
+  **Diagnose → Prototype → Adopt** action plan. Static and read-only.
+- **`assess_test_strategy`** reads the practice through a typed
+  questionnaire (risk-based prioritisation, ownership, standards, CI gate,
+  flaky policy, community of practice, AI usage). Unknown answers become the
+  questions to ask the team; gaps come with a 30/60/90-day plan and the
+  service offers that address them.
+
+The `qa://audit-rubric` resource documents the scale, and the `qa-audit`
+prompt sequences both capabilities into one report. See
+[Test Suite Audit](src/capabilities/test-suite-audit/README.md) and
+[Test Strategy Assessment](src/capabilities/test-strategy-assessment/README.md).
 
 ---
 
@@ -76,6 +99,7 @@ current features** — they will be built on the primitives described in the
 | -------------------------- | ------------------------- |
 | qa://test-strategy         | Testing strategy          |
 | qa://playwright-guidelines | Playwright best practices |
+| qa://audit-rubric          | Maturity levels, axes and severity scale behind the audit capabilities |
 
 ---
 
@@ -86,6 +110,7 @@ current features** — they will be built on the primitives described in the
 | generate-playwright-test | Generate Playwright tests from requirements    |
 | analyze-test-failure     | Analyze test failures using available evidence |
 | flaky-test-triage        | Guide a flaky-test triage with `triage_flaky_test` |
+| qa-audit                 | Audit a suite + its practice end to end and write the consulting-grade report |
 
 ---
 
@@ -356,6 +381,8 @@ More detail lives in the dedicated documents:
 
 * [Vision](docs/vision.md) — project philosophy and Agentic Quality Engineering
 * [Connect to a project](docs/connect-to-a-project.md) — wire the server to a real test project (both methods)
+* [Test Suite Audit](src/capabilities/test-suite-audit/README.md) — the day-one code audit capability and its [reasoning](src/capabilities/test-suite-audit/docs/reasoning.md)
+* [Test Strategy Assessment](src/capabilities/test-strategy-assessment/README.md) — the practice-level assessment capability
 * [Architecture](docs/architecture.md) — how tools, resources and prompts are wired
 * [Roadmap](ROADMAP.md) — planned evolution and non-goals
 * [Contributing](CONTRIBUTING.md) — how to propose QA workflows and changes

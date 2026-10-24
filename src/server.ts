@@ -12,6 +12,10 @@ import { registerAnalyzeTestFailure } from "./prompts/analyzeTestFailure.js";
 
 import { registerTriageFlakyTest } from "./capabilities/flaky-test-triage/tool.js";
 import { registerFlakyTestTriagePrompt } from "./capabilities/flaky-test-triage/prompts/flakyTestTriage.js";
+import { registerAuditTestSuite } from "./capabilities/test-suite-audit/tool.js";
+import { registerAssessTestStrategy } from "./capabilities/test-strategy-assessment/tool.js";
+import { registerAuditRubric } from "./resources/auditRubric.js";
+import { registerQaAuditPrompt } from "./prompts/qaAudit.js";
 
 /**
  * Build the QA MCP server and register all capabilities.
@@ -33,15 +37,19 @@ export function createServer(): McpServer {
 
   // Capabilities (executable QA expertise — judgment, not data).
   registerTriageFlakyTest(server);
+  registerAuditTestSuite(server);
+  registerAssessTestStrategy(server);
 
   // Resources (reference material an agent can read).
   registerTestStrategy(server);
   registerPlaywrightGuidelines(server);
+  registerAuditRubric(server);
 
   // Prompts (reusable QA workflows).
   registerGeneratePlaywrightTest(server);
   registerAnalyzeTestFailure(server);
   registerFlakyTestTriagePrompt(server);
+  registerQaAuditPrompt(server);
 
   return server;
 }
