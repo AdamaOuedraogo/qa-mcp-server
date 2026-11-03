@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, type FileHandle } from "node:fs/promises";
 import { join, relative, sep, basename, extname } from "node:path";
 import type {
   CiObservation,
@@ -405,15 +405,33 @@ async function walk(root: string, maxFiles: number, notes: string[]): Promise<Fo
   return found;
 }
 
-async function readCapped(abs: string, maxBytes: number, notes: string[], rel: string): Promise<string> {
+/**
+ * Read at most `maxBytes` bytes of a file as UTF-8. The buffer is sized to
+ * `min(size, maxBytes)` and filled with positional reads, so memory use is
+ * bounded by the cap, not by the file size. Exported for tests only; not
+ * exposed over MCP.
+ */
+export async function readCapped(abs: string, maxBytes: number, notes: string[], rel: string): Promise<string> {
+  let fh: FileHandle | undefined;
   try {
-    const s = await stat(abs);
-    if (s.size > maxBytes) notes.push(`${rel}: truncated to ${maxBytes} bytes.`);
-    const buf = await readFile(abs);
-    return buf.subarray(0, maxBytes).toString("utf8");
+    fh = await open(abs, "r");
+    const st = await fh.stat();
+    if (!st.isFile()) throw new Error("not a regular file");
+    const size = st.size;
+    if (size > maxBytes) notes.push(`${rel}: truncated to ${maxBytes} bytes.`);
+    const buf = Buffer.alloc(Math.max(0, Math.min(size, maxBytes)));
+    let filled = 0;
+    while (filled < buf.length) {
+      const { bytesRead } = await fh.read(buf, filled, buf.length - filled, filled);
+      if (bytesRead === 0) break; // file shrank after stat
+      filled += bytesRead;
+    }
+    return buf.subarray(0, filled).toString("utf8");
   } catch (err) {
     notes.push(`${rel}: could not be read (${err instanceof Error ? err.message : String(err)}).`);
     return "";
+  } finally {
+    await fh?.close().catch(() => undefined);
   }
 }
 
