@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { auditTestSuite } from "../evaluator.js";
-import { analyseCi, analyseRunnerConfig, analyseSpec, scanProject } from "../scanner.js";
+import { analyseCi, analyseRunnerConfig, analyseSpec, readCapped, scanProject } from "../scanner.js";
 import { resolveInside } from "../tool.js";
 import type { TestSuiteObservation } from "../schema.js";
 
@@ -348,6 +348,56 @@ test("scanner does not follow symlinks and reports unreadable or truncated files
     assert.ok(obs.scanNotes.some((n) => n.includes("big.spec.ts") && n.includes("truncated")));
   } finally {
     await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("readCapped reads at most maxBytes and handles empty, small, exact and missing files", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(join(tmpdir(), "qa-audit-"));
+  try {
+    const notes: string[] = [];
+    await writeFile(join(dir, "empty.ts"), "");
+    await writeFile(join(dir, "small.ts"), "abc");
+    await writeFile(join(dir, "exact.ts"), "x".repeat(16));
+    await writeFile(join(dir, "big.ts"), "0123456789".repeat(10));
+    assert.equal(await readCapped(join(dir, "empty.ts"), 16, notes, "empty.ts"), "");
+    assert.equal(await readCapped(join(dir, "small.ts"), 16, notes, "small.ts"), "abc");
+    assert.equal(await readCapped(join(dir, "exact.ts"), 16, notes, "exact.ts"), "x".repeat(16));
+    assert.equal(notes.length, 0, "no note for files at or under the cap");
+    assert.equal(await readCapped(join(dir, "big.ts"), 16, notes, "big.ts"), "0123456789012345");
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0], "big.ts: truncated to 16 bytes.");
+    assert.equal(await readCapped(join(dir, "missing.ts"), 16, notes, "missing.ts"), "");
+    assert.match(notes[1] ?? "", /^missing\.ts: could not be read \(/);
+    assert.equal(await readCapped(dir, 16, notes, "a-directory"), "");
+    assert.match(notes[2] ?? "", /^a-directory: could not be read \(/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("scanner reads only the capped prefix of an oversized file", async () => {
+  // A sparse file larger than 2 GiB: an unbounded readFile() rejects it with
+  // ERR_FS_FILE_TOO_LARGE, so this fails unless the read is bounded. Sparse
+  // allocation keeps actual disk and memory use small.
+  const { mkdtemp, writeFile, open, mkdir, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(join(tmpdir(), "qa-audit-"));
+  try {
+    await mkdir(join(dir, "tests"));
+    const file = join(dir, "tests", "huge.spec.ts");
+    await writeFile(file, `test("huge", async () => { await page.waitForTimeout(500); });\n`);
+    const fh = await open(file, "r+");
+    await fh.truncate(2 ** 31 + 1024);
+    await fh.close();
+    const obs = await scanProject(dir, { maxFileBytes: 4096 });
+    assert.deepEqual(obs.specs.map((s) => s.path), ["tests/huge.spec.ts"], "the capped prefix was analysed");
+    assert.equal(obs.specs[0]!.hardWaits.length, 1, "signals in the prefix are still detected");
+    assert.ok(obs.scanNotes.includes("tests/huge.spec.ts: truncated to 4096 bytes."));
+    assert.ok(!obs.scanNotes.some((n) => n.includes("could not be read")), obs.scanNotes.join("\n"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
