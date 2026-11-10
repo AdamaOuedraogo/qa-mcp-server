@@ -2,6 +2,7 @@ import { statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { runCommand, type RunCommandResult } from "../utils/command.js";
 import { getExecutionConfig } from "../config.js";
+import { wrapUntrusted } from "../utils/untrusted.js";
 
 /**
  * Execution adapter — the single security boundary for real test runs.
@@ -81,7 +82,11 @@ export async function runInProject(
   });
 }
 
-/** Render a completed run into a structured, human- and LLM-readable summary. */
+/**
+ * Render a completed run into a structured, human- and LLM-readable summary.
+ * The captured output is wrapped as untrusted data: it comes from the test
+ * run, not from the operator or the caller, and is never treated as instructions.
+ */
 export function renderRunResult(
   label: string,
   command: string,
@@ -105,9 +110,10 @@ export function renderRunResult(
     result.timedOut ? "Timed out: yes" : null,
     result.truncated ? "Note: output was truncated." : null,
     "",
-    "----- OUTPUT -----",
-    output.length > 0 ? output : "(no output captured)",
-    "----- END OUTPUT -----",
+    wrapUntrusted(
+      `the captured output of the ${label} run`,
+      output.length > 0 ? output : "(no output captured)",
+    ),
   ]
     .filter((line) => line !== null)
     .join("\n");

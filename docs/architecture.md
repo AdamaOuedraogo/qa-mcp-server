@@ -81,7 +81,8 @@ LLM tool call
      ▼
 1. Transport        JSON-RPC over stdio → McpServer
 2. Validation       zod parses arguments; malformed input is rejected here
-3. Sanitization     sanitizeArg() strips control characters from values
+3. Sanitization     sanitizeArg() strips control characters; callerArg()
+                    refuses option-like, absolute and ".." caller values
 4. Handler          the tool's own logic builds the argument list
 5. Security boundary allowlist + no-shell (runCommand); not crossed in dry run
 6. Execution        dry run by default (command is described, not run);
@@ -109,6 +110,17 @@ which may itself be relaying untrusted content.
 - **No shell.** When a process is run, `runCommand` passes arguments as an array
   with `shell: false` against an allowlist — there is no string interpolation to
   exploit.
+- **Caller values stay inside the project.** Free-form run-tool values (a
+  spec path, a project or browser name) are refused when they start with `-`,
+  are absolute, or contain `..` (`src/tools/callerArgs.ts`), so a caller can
+  neither pass an option to the runner nor point it outside the project.
+- **Report reads are confined and bounded.** `read_test_report` resolves its
+  path only inside `QA_MCP_PROJECT_DIR`, refuses absolute paths and `..`,
+  resolves symbolic links with `realpath` and refuses a target outside the
+  project, and reads at most 20,000 bytes from disk.
+- **Output is data.** Captured test output and report contents are returned
+  inside explicit untrusted-data delimiters with a one-line notice
+  (`src/utils/untrusted.ts`), so the model reads them as data, not instructions.
 - **Dry run by default.** The run tools execute nothing unless the operator
   sets both `QA_MCP_EXECUTION_MODE=live` and `QA_MCP_PROJECT_DIR`, so
   connecting the server has no side effects by default.
@@ -118,9 +130,9 @@ security boundary rather than being wired directly into a handler.
 
 These are the controls that exist today. There is no journal, no approval
 gate, no sandbox and no egress allowlist yet; the vision describes them as
-intent and [ROADMAP.md](../ROADMAP.md) places them in v0.3. `read_test_report`
-is not yet confined to `QA_MCP_PROJECT_DIR` (tracked in
-[issue #7](https://github.com/AdamaOuedraogo/qa-mcp-server/issues/7)).
+intent and [ROADMAP.md](../ROADMAP.md) places them in v0.3. The controls
+above are pinned by tests in `src/utils/command.test.ts`,
+`src/execution/adapter.test.ts` and `src/tools/*.test.ts`.
 
 ## Execution model
 

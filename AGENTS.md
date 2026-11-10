@@ -60,6 +60,7 @@ not open it; tell the user.
 src/index.ts              stdio entry point; diagnostics go to stderr
 src/server.ts             createServer(): register calls only, no logic
 src/tools/                run_playwright_test, run_cypress_test, read_test_report
+src/tools/callerArgs.ts   callerArg(): refuses option-like, absolute and .. caller values
 src/resources/            qa://test-strategy, qa://playwright-guidelines
 src/prompts/              generate-playwright-test, analyze-test-failure
 src/config.ts             execution mode, project dir, timeout (env, read per call)
@@ -67,6 +68,7 @@ src/environments.ts       closed environment enum -> operator-provided base URL
 src/runners.ts            operator-provided Cypress/Playwright invocation details
 src/execution/adapter.ts  runInProject(): the only path to a live process
 src/utils/command.ts      runCommand() and sanitizeArg()
+src/utils/untrusted.ts    wrapUntrusted(): delimiters around test output and report text
 src/capabilities/flaky-test-triage/
   schema.ts               observation in, judgment out (zod)
   rules.ts, repairs.ts    the expertise: signals, classifier, repair contract
@@ -91,7 +93,9 @@ pnpm dev         # run from source over stdio
 pnpm start       # run dist/index.js over stdio
 ```
 
-- `pnpm test` only picks up `src/*.test.ts` and `src/capabilities/*/tests/*.test.ts`.
+- `pnpm test` picks up `src/*.test.ts`, `src/tools/*.test.ts`, `src/execution/*.test.ts`,
+  `src/utils/*.test.ts` and `src/capabilities/*/tests/*.test.ts`. A test anywhere
+  else needs the script in `package.json` updated.
 - `pnpm dev` and `pnpm start` block waiting for an MCP client on stdio. They are
   not a validation step.
 - `examples/triage-report.mjs` needs `pnpm build` first.
@@ -124,17 +128,21 @@ from environment variables and is trusted. Preserve all of the following:
   allowlisted binary, an argv array, `shell: false`. Never use `exec`,
   `execSync`, `shell: true`, or a command built as a string. Do not extend
   `ALLOWED_COMMANDS` without explicit maintainer approval.
-- Timeouts, output size limits, `sanitizeArg()`, and the `..` traversal check
-  stay in place.
+- Timeouts, output size limits, `sanitizeArg()`, the `..` traversal check, the
+  `callerArg()` refusals (option-like, absolute, `..`), the `read_test_report`
+  confinement (realpath inside `QA_MCP_PROJECT_DIR`, bounded read) and the
+  untrusted-data wrapping of test output and report text stay in place.
 
 Describe these protections as they are, and state intended guarantees as
 intentions. Current limitations to keep in mind:
 
 - The configured working directory and the `..` check are not a filesystem
   sandbox.
-- `read_test_report` resolves paths from `process.cwd()`; it is not confined to
-  `QA_MCP_PROJECT_DIR`.
-- Free-form caller strings are stripped of control characters, not allowlisted.
+- `read_test_report` is confined to `QA_MCP_PROJECT_DIR` by path checks and
+  `realpath`; that is not a filesystem sandbox either, and it needs the variable
+  even in dry-run mode.
+- Free-form caller strings are stripped of control characters and refused when
+  option-like, absolute or containing `..`; they are not allowlisted.
 - Live test code runs with the server's privileges and environment.
 
 Before a substantial change to the execution boundary (`src/execution/`,
