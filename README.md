@@ -2,11 +2,11 @@
 
 > **Give an AI agent the QA lead's job — with method, guardrails and a trace.**
 
-`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that exposes Quality Engineering as typed, testable capabilities: judgments with evidence, not raw data.
+`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that exposes Quality Engineering as typed, testable capabilities. Judgment capabilities return structured assessments with evidence; supporting tools return bounded, explicitly untrusted observations.
 
 Writing code is no longer the slow part of shipping software; knowing whether it holds is. This project exists to keep quality from becoming the bottleneck. It models the work of an experienced quality engineer — define a test strategy, set quality gates, generate and run tests, judge flaky failures and release readiness, investigate incidents — and makes that work available to any agent harness through MCP.
 
-It starts small and safe: running Playwright and Cypress, reading reports, triaging flaky tests. Those are execution details. The first-class inputs of Quality Engineering are requirements, tickets, source code, merge requests, incidents and business rules, and the direction is the full job built on four shared primitives: a journal of runs, an approval gate, evals of the server's own judgment, and delegation contracts.
+It starts small and safe: running Playwright and Cypress, reading reports, triaging flaky tests. Those are execution details. The first-class inputs of Quality Engineering are requirements, tickets, source code, merge requests, incidents and business rules, and the direction is the full job built on four shared primitives planned for v0.3: a journal of runs, an approval gate, evals of the server's own judgment, and delegation contracts. None of them exists yet.
 
 > **Not a replacement for QA engineers: a multiplier of their judgment.**
 
@@ -39,10 +39,10 @@ A team that ships ten times faster without ten times more verification accumulat
 An AI agent can carry that work, on one condition: it must receive three things nobody gives it by default.
 
 1. **A method** — how to prioritize, how to judge a flaky test, when a release is ready. Expertise as explicit rules, not the model's mood.
-2. **Deterministic guardrails** — what the agent may never do on its own, whatever it is told. Enforced in code, not in a prompt.
-3. **A trace** — every judgment with its evidence, every run with a receipt. Observable, replayable, evaluable.
+2. **Deterministic guardrails** — what the agent may never do on its own, whatever it is told. These must be enforced in code, not in a prompt.
+3. **A trace** — every judgment should carry its evidence, every run a receipt, so the work is observable, replayable and evaluable.
 
-Not more intelligence. Method, limits and memory. See the full [Vision](docs/vision.md).
+Not more intelligence. Method, limits and memory. This is the intent: today's guardrails are the execution boundary described under [Real execution](#real-execution-opt-in), and the journal, receipts and approval gate are v0.3 roadmap items. See the full [Vision](docs/vision.md).
 
 ---
 
@@ -263,14 +263,14 @@ The server acts as a controlled bridge between an AI assistant and the Quality E
 
 Early versions of this project were framed as "no terminal for the AI". The real point is narrower: an agent may have a whole machine when that machine has walls.
 
-This server never exposes a generic shell to the model, because a QA capability does not need one. But the same design works when the agent runs in a sandbox with a full shell: an egress allowlist, a pinned working directory, an approval gate for sensitive actions. The walls are what make agent behaviour:
+This server never exposes a generic shell to the model, because a QA capability does not need one. The same design should hold when the agent runs in a sandbox with a full shell: an egress allowlist, a pinned working directory, an approval gate for sensitive actions. The walls are what make agent behaviour:
 
 * easier to understand;
 * easier to audit;
 * easier to secure;
 * easier to extend.
 
-Every capability is explicitly designed, reviewed and documented; every sensitive action is gated in code, not in a prompt.
+Every capability is explicitly designed, reviewed and documented. The walls this server has today are the execution boundary: a single execution path (`runInProject()`), allowlisted binaries (`npx`, `pnpm`, `node`), no shell, a working directory pinned to `QA_MCP_PROJECT_DIR`, a `..` traversal check, a timeout and an output cap. There is no sandbox, no egress allowlist and no approval gate yet. The approval gate that would hold a sensitive action until a code from outside the system releases it, in code rather than in a prompt, is a v0.3 primitive in [ROADMAP.md](ROADMAP.md), not a current control.
 
 ---
 
@@ -315,7 +315,7 @@ Details, non-goals and the three-layer design are in [ROADMAP.md](ROADMAP.md).
 
 # Vision
 
-Quality is becoming the bottleneck of software delivery. This project gives agents the job of a QA lead — strategy, gates, tests, judgment, investigation — with the method, the guardrails and the trace that let a company trust them with its releases.
+Quality is becoming the bottleneck of software delivery. This project gives agents the job of a QA lead — strategy, gates, tests, judgment, investigation — with the method, the guardrails and the trace that should let a company trust them with its releases. The method exists for flaky-test triage today; the guardrails are the execution boundary; the trace is planned.
 
 The server is one layer in a three-layer design, and the only one this repository owns: capabilities and primitives live here; the QA method lives in skills and agent instructions; orchestration (which agent does what, where) belongs to the harness you already use. Keeping orchestration out of the server is deliberate: harnesses improve every few months, and a capability server benefits from every improvement.
 

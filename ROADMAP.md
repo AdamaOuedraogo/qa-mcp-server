@@ -23,7 +23,9 @@ What is already in place as of v0.1 and the first part of v0.2:
 
 ## v0.2 — Real execution (opt-in), remaining items
 
-- [ ] Confine `read_test_report` to `QA_MCP_PROJECT_DIR`
+- [ ] Confine `read_test_report` to `QA_MCP_PROJECT_DIR`, with symlink
+      handling, bounded reads and tests (high priority:
+      [issue #7](https://github.com/AdamaOuedraogo/qa-mcp-server/issues/7))
 - [ ] Wrap report contents as untrusted data (delimiters, no instruction
       following) before they reach the model
 - [ ] Tests for the execution boundary (`runCommand`, `runInProject`:
@@ -32,12 +34,29 @@ What is already in place as of v0.1 and the first part of v0.2:
 
 ## v0.3 — Primitives
 
-Four building blocks every later capability shares. Deterministic code, no
-model required.
+Four building blocks every later capability shares, plus the evidence schema
+they consume. Deterministic code, no model required. None of this exists yet.
 
 - [ ] **Journal and receipts**: a `run_id` per tool call; JSONL events per run
-      (`started`, `output`, `exit`, `timeout`); a receipt = report hash +
-      commit + environment + timestamp; a `read_run` tool
+      (`started`, `output`, `exit`, `timeout`); a `read_run` tool. A receipt
+      records:
+      - the **canonical artifact hash**: the report normalized (stable key
+        order, trimmed volatile fields such as durations and absolute paths)
+        before hashing, with the algorithm and the normalization version named
+        in the receipt, so the same run hashes the same everywhere;
+      - the commit, the environment name and the timestamp;
+      - the **execution identity**: who or what produced the run (the local
+        runner under the server's user, a CI job and runner id, or a delegated
+        session) and the trust boundary it ran inside;
+      - the `run_id` and a reference to the journal entries.
+
+      **Verification semantics**: a receipt verifies when the artifact
+      re-hashes to the recorded value under the recorded normalization and
+      the execution identity is one the operator's policy trusts. A receipt
+      that does not verify is recorded but is not evidence for a release
+      judgment. Cryptographic signing of receipts is optional and comes later;
+      the first version relies on the journal and the operator's trust in the
+      identity.
 - [ ] **Approval gate**: operator policy per action (`free` / `gated`),
       `production` gated by default; a held action returns a `hold_id`, pings
       a channel (ntfy first), and executes only after a code that comes from
@@ -52,13 +71,25 @@ model required.
       (GitHub Actions first), polls with a deadline and a heartbeat, and brings
       back report + receipt; a `compare_runs(local, remote)` capability that
       aligns results by test name and commit
+- [ ] **Normalized observation and evidence schema (versioned)**, the
+      prerequisite of every v0.4 capability: a `zod` schema with a version
+      field that describes what a judgment may look at: the change (diff and
+      files touched), the requirements or acceptance criteria, CI status and
+      runs, provenance (where each item came from, retrieved by whom and
+      when) and artifact links (reports, receipts, logs). The harness
+      retrieves the evidence (layer 3); the server normalizes it into this
+      schema and judges it (layer 1), and never fetches from a ticket or code
+      host on its own. For the first end-to-end case, a minimal GitHub adapter
+      (pull request diff and check status) or harness-provided input is
+      enough; a full connector suite stays in the exploratory list.
 - [ ] Optional container sandbox for live mode (compose + egress allowlist
       proxy), documented as a reference setup
 
 ## v0.4 — The QA lead's capabilities
 
-The job itself, built on the primitives. Each returns a structured judgment
-with evidence.
+The job itself, built on the primitives and on the versioned evidence schema
+from v0.3, which is a prerequisite: no v0.4 capability takes free-form input.
+Each returns a structured judgment with evidence.
 
 - [ ] `define_test_strategy` — from requirements, code and knowledge base to a
       prioritized P0 / P1 / P2 strategy and the quality gates it implies
@@ -75,8 +106,8 @@ with evidence.
 
 Only if they prove genuinely useful.
 
-- [ ] Connectors for first-class inputs: Jira, GitLab/GitHub, incident and
-      log platforms, knowledge bases
+- [ ] Connectors for first-class inputs beyond the minimal GitHub adapter:
+      Jira, GitLab, incident and log platforms, knowledge bases
 - [ ] RAG over test suites, docs and past failures
 - [ ] Additional frameworks (Vitest, Jest, k6)
 - [ ] Trace/screenshot ingestion for failure analysis

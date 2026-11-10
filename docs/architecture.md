@@ -116,6 +116,12 @@ which may itself be relaying untrusted content.
 Real execution does not weaken these properties: it sits behind an explicit
 security boundary rather than being wired directly into a handler.
 
+These are the controls that exist today. There is no journal, no approval
+gate, no sandbox and no egress allowlist yet; the vision describes them as
+intent and [ROADMAP.md](../ROADMAP.md) places them in v0.3. `read_test_report`
+is not yet confined to `QA_MCP_PROJECT_DIR` (tracked in
+[issue #7](https://github.com/AdamaOuedraogo/qa-mcp-server/issues/7)).
+
 ## Execution model
 
 Real Playwright/Cypress runs are implemented as an additive layer, not a

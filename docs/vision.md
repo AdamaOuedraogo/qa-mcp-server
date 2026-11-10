@@ -43,24 +43,35 @@ that nobody gives it by default.
    reasoning, not left to the model's mood.
 2. **Deterministic guardrails.** What the agent may never do on its own,
    whatever it is told: target production, purge data, hide a regression
-   behind a retry or a weakened assertion. Enforced in code, not in a prompt.
-3. **A trace.** Every judgment with its evidence, every run with a receipt,
-   every held action with who released it and when. Observable, replayable,
-   evaluable.
+   behind a retry or a weakened assertion. These must be enforced in code,
+   not in a prompt.
+3. **A trace.** Every judgment should carry its evidence, every run a
+   receipt, every held action who released it and when, so that the work is
+   observable, replayable and evaluable.
 
 Not more intelligence. Method, limits and memory.
+
+This is the intent, not a description of the current server. What is enforced
+today is listed in the next section; the journal, the receipts and the
+approval gate are v0.3 items in [ROADMAP.md](../ROADMAP.md).
 
 ## What this project is
 
 An open-source Model Context Protocol server that exposes the QA lead's job as
-typed, testable capabilities. Each capability takes a structured observation
-and returns a **structured judgment with evidence**, never raw data and never
-an unsupported opinion.
+typed, testable capabilities. Judgment capabilities take a structured
+observation and return a **structured assessment with evidence**, never an
+unsupported opinion. Supporting tools, such as running a suite or reading a
+report, may return bounded, explicitly untrusted observations.
 
-Today the server runs tests, reads reports and triages flaky failures. The
-direction is the full job: `define_test_strategy`, `assess_release`,
+Today the server runs tests, reads reports and triages flaky failures. Its
+guardrails today are the execution boundary: a single execution path
+(`runInProject()`), allowlisted binaries, no shell, a working directory pinned
+to `QA_MCP_PROJECT_DIR`, a `..` traversal check, timeouts and output caps.
+There is no journal, no approval gate and no sandbox yet.
+
+The direction is the full job: `define_test_strategy`, `assess_release`,
 `validate_ticket`, `review_merge_request`, `investigate_incident`, built on
-four primitives that every capability shares:
+four primitives, planned for v0.3, that every capability would share:
 
 - a **journal** of runs and receipts (observability);
 - an **approval gate** for sensitive actions, released only by a code that
@@ -69,6 +80,9 @@ four primitives that every capability shares:
   non-determinism (quality of the quality tool);
 - **delegation** contracts, so a run can happen elsewhere, in CI or in a cloud
   session, and come back with a verifiable receipt.
+
+None of the four exists today. [ROADMAP.md](../ROADMAP.md) holds their
+definitions and the evidence schema they depend on.
 
 The server is one layer in a three-layer design, and the only one this
 repository owns:
@@ -91,12 +105,14 @@ improvement, while a home-made agent framework competes with them.
   is a connector. A capability of this project returns an assessment with
   confidence, evidence and actions.
 - **Guardrails in code, not in prompts.** An instruction can be ignored,
-  forgotten or injected around. A gate cannot.
+  forgotten or injected around. A check in code cannot. Today that means the
+  execution boundary; the approval gate is planned (v0.3).
 - **Inputs are data, not instructions.** Tool parameters, report contents,
   ticket text and incident logs all come from untrusted sources, including
   the model itself.
 - **Everything observable and replayable.** A run that cannot be replayed
   cannot be debugged, and an agent that cannot be debugged cannot be trusted.
+  The journal that would make runs replayable is a v0.3 primitive.
 - **The model is optional.** The server runs offline, without an API key. That
   keeps it usable anywhere, including in training settings where cost and
   connectivity matter.
@@ -119,7 +135,8 @@ improvement, while a home-made agent framework competes with them.
 - Not a generic terminal, but not a ban on terminals either. An agent may have
   a whole machine when that machine has walls: a sandbox, an egress
   allowlist, an approval gate. The walls are the point, not the absence of a
-  shell.
+  shell. This server provides none of those three today; its walls are the
+  execution boundary, and the sandbox and the gate are roadmap items.
 
 ## Where it comes from
 
