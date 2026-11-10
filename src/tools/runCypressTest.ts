@@ -3,8 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { sanitizeArg } from "../utils/command.js";
 import { getExecutionConfig, isLiveExecutionEnabled } from "../config.js";
 import { ExecutionError, renderRunResult, runInProject } from "../execution/adapter.js";
-import { TARGET_ENVIRONMENTS, resolveEnvironment } from "../environments.js";
-import { getCypressRunnerConfig } from "../runners.js";
+import { TARGET_ENVIRONMENTS, resolveEnvironment, type ResolvedEnvironment } from "../environments.js";
+import { getCypressRunnerConfig, type CypressRunnerConfig } from "../runners.js";
+import { CallerArgError, callerArg } from "./callerArgs.js";
 
 /**
  * Tool: run_cypress_test
@@ -27,6 +28,60 @@ import { getCypressRunnerConfig } from "../runners.js";
  * the server plug into any Cypress project without giving the caller free-form
  * command control.
  */
+
+export interface CypressRunInput {
+  spec?: string;
+  browser?: string;
+}
+
+export interface CypressArgv {
+  /** Full argument list for `npx`; always starts with `cypress run`. */
+  args: string[];
+  /** Child environment derived from the enum and operator configuration only. */
+  extraEnv: Record<string, string>;
+  safeSpec?: string;
+  safeBrowser?: string;
+}
+
+/**
+ * Build the Cypress argv from caller input and operator configuration.
+ *
+ * Pure and exported so the shape can be tested without spawning anything.
+ * The first two entries are fixed: a caller value can never choose the
+ * binary (`npx`), the package (`cypress`) or the subcommand (`run`).
+ * Caller values go through {@link callerArg}, which refuses option-like
+ * values, absolute paths and `..`. Throws {@link CallerArgError}.
+ */
+export function buildCypressArgs(
+  input: CypressRunInput,
+  runner: CypressRunnerConfig,
+  resolved: ResolvedEnvironment | undefined,
+): CypressArgv {
+  const safeSpec = input.spec ? callerArg(input.spec, "spec") : undefined;
+  const safeBrowser = input.browser ? callerArg(input.browser, "browser") : undefined;
+
+  const args = ["cypress", "run"];
+  if (safeSpec) args.push("--spec", safeSpec);
+  if (safeBrowser) args.push("--browser", safeBrowser);
+
+  // Operator-provided invocation details for non-default Cypress setups.
+  if (runner.e2e) args.push("--e2e");
+  if (runner.configFile) args.push("--config-file", sanitizeArg(runner.configFile));
+
+  const extraEnv: Record<string, string> = {};
+  if (resolved) {
+    // `target` value comes from the fixed enum, so it is always safe.
+    args.push("--env", `target=${resolved.name}`);
+    if (resolved.baseUrl) extraEnv.CYPRESS_BASE_URL = resolved.baseUrl;
+    // Some projects resolve their config from a plain env var (e.g. ENVIRONMENT).
+    if (runner.environmentVar) extraEnv[runner.environmentVar] = resolved.name;
+  }
+  // Project selector some Cucumber/hybrid setups require (e.g. PROJECT=hybrid).
+  if (runner.project) extraEnv.PROJECT = runner.project;
+
+  return { args, extraEnv, safeSpec, safeBrowser };
+}
+
 export function registerRunCypressTest(server: McpServer): void {
   server.registerTool(
     "run_cypress_test",
@@ -41,7 +96,10 @@ export function registerRunCypressTest(server: McpServer): void {
         spec: z
           .string()
           .optional()
-          .describe("Glob or path to a spec file, e.g. cypress/e2e/login.cy.ts"),
+          .describe(
+            "Glob or path to a spec file, relative to the project, e.g. " +
+              'cypress/e2e/login.cy.ts. Absolute paths, ".." and values starting with "-" are refused.',
+          ),
         browser: z
           .string()
           .optional()
@@ -56,30 +114,21 @@ export function registerRunCypressTest(server: McpServer): void {
       },
     },
     async ({ spec, browser, environment }) => {
-      const safeSpec = spec ? sanitizeArg(spec) : undefined;
-      const safeBrowser = browser ? sanitizeArg(browser) : undefined;
-
-      const args = ["cypress", "run"];
-      if (safeSpec) args.push("--spec", safeSpec);
-      if (safeBrowser) args.push("--browser", safeBrowser);
-
-      // Operator-provided invocation details for non-default Cypress setups.
       const runner = getCypressRunnerConfig();
-      if (runner.e2e) args.push("--e2e");
-      if (runner.configFile) args.push("--config-file", sanitizeArg(runner.configFile));
-
       // Resolve the closed environment name to operator-provided config.
       const resolved = environment ? resolveEnvironment(environment) : undefined;
-      const extraEnv: Record<string, string> = {};
-      if (resolved) {
-        // `target` value comes from the fixed enum, so it is always safe.
-        args.push("--env", `target=${resolved.name}`);
-        if (resolved.baseUrl) extraEnv.CYPRESS_BASE_URL = resolved.baseUrl;
-        // Some projects resolve their config from a plain env var (e.g. ENVIRONMENT).
-        if (runner.environmentVar) extraEnv[runner.environmentVar] = resolved.name;
+
+      let argv: CypressArgv;
+      try {
+        argv = buildCypressArgs({ spec, browser }, runner, resolved);
+      } catch (err) {
+        const message = err instanceof CallerArgError ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `run_cypress_test rejected its input: ${message}` }],
+        };
       }
-      // Project selector some Cucumber/hybrid setups require (e.g. PROJECT=hybrid).
-      if (runner.project) extraEnv.PROJECT = runner.project;
+      const { args, extraEnv, safeSpec, safeBrowser } = argv;
 
       const command = `npx ${args.join(" ")}`;
 

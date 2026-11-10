@@ -1,7 +1,7 @@
 {
   "name": "qa-mcp-server",
   "version": "0.1.0",
-  "description": "An open source Model Context Protocol (MCP) server for Quality Engineering — a clean, extensible foundation for AI agents interacting with real QA workflows (Playwright, Cypress, reports).",
+  "description": "Open-source MCP server that gives AI agents the QA lead's job: test strategy, quality gates, test execution (Playwright, Cypress), flaky triage and release readiness as typed capabilities, with judgments backed by evidence, deterministic guardrails and a replayable trace.",
   "type": "module",
   "license": "MIT",
   "author": "Adama Ouedraogo",
@@ -32,7 +32,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/*.test.ts src/capabilities/*/tests/*.test.ts"
+    "test": "node --import tsx --test src/*.test.ts src/tools/*.test.ts src/execution/*.test.ts src/utils/*.test.ts src/capabilities/*/tests/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

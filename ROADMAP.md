@@ -20,17 +20,23 @@ What is already in place as of v0.1 and the first part of v0.2:
 - First judgment capability: `triage_flaky_test` (pure, deterministic, tested)
 - Report adapters: Playwright JSON, Mochawesome, JUnit XML (internal)
 - Documentation (README, Vision, Architecture, Contributing, AGENTS.md, KEEP.md)
+- Execution-boundary tests; `read_test_report` confined to the project directory
+  with a bounded read; test output and reports returned as untrusted data
 
 ## v0.2 — Real execution (opt-in), remaining items
 
-- [ ] Confine `read_test_report` to `QA_MCP_PROJECT_DIR`, with symlink
-      handling, bounded reads and tests (high priority:
-      [issue #7](https://github.com/AdamaOuedraogo/qa-mcp-server/issues/7))
-- [ ] Wrap report contents as untrusted data (delimiters, no instruction
-      following) before they reach the model
-- [ ] Tests for the execution boundary (`runCommand`, `runInProject`:
-      allowlist, path traversal, timeout, no `node -e` / `pnpm exec` escape)
+- [x] Confine `read_test_report` to `QA_MCP_PROJECT_DIR`, with symlink
+      handling, bounded reads and tests
+      ([issue #7](https://github.com/AdamaOuedraogo/qa-mcp-server/issues/7))
+- [x] Wrap report contents and captured test output as untrusted data
+      (delimiters, one-line notice) before they reach the model
+- [x] Tests for the execution boundary (`runCommand`, `runInProject`:
+      allowlist, path traversal, timeout, output cap, no `node -e` /
+      `pnpm exec` escape through any registered tool)
 - [ ] Structured parsing of Playwright/Cypress results into typed output
+- [ ] Return captured test output and report contents as structured MCP
+      content fields rather than inside text delimiters; the current wrapping
+      is best-effort labelling, not a security boundary
 
 ## v0.3 — Primitives
 

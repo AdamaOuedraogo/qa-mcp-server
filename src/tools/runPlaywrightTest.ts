@@ -3,8 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { sanitizeArg } from "../utils/command.js";
 import { getExecutionConfig, isLiveExecutionEnabled } from "../config.js";
 import { ExecutionError, renderRunResult, runInProject } from "../execution/adapter.js";
-import { TARGET_ENVIRONMENTS, resolveEnvironment } from "../environments.js";
-import { getPlaywrightRunnerConfig } from "../runners.js";
+import { TARGET_ENVIRONMENTS, resolveEnvironment, type ResolvedEnvironment } from "../environments.js";
+import { getPlaywrightRunnerConfig, type PlaywrightRunnerConfig } from "../runners.js";
+import { CallerArgError, callerArg } from "./callerArgs.js";
 
 /**
  * Tool: run_playwright_test
@@ -20,6 +21,53 @@ import { getPlaywrightRunnerConfig } from "../runners.js";
  * flag, so base-URL injection is the standard mechanism. The caller can select
  * an environment but can never define what it points to.
  */
+
+export interface PlaywrightRunInput {
+  testPath?: string;
+  headed?: boolean;
+  project?: string;
+}
+
+export interface PlaywrightArgv {
+  /** Full argument list for `npx`; always starts with `playwright test`. */
+  args: string[];
+  /** Child environment derived from operator configuration only. */
+  extraEnv: Record<string, string>;
+  safeTestPath?: string;
+  safeProject?: string;
+}
+
+/**
+ * Build the Playwright argv from caller input and operator configuration.
+ *
+ * Pure and exported so the shape can be tested without spawning anything.
+ * The first two entries are fixed: a caller value can never choose the
+ * binary (`npx`), the package (`playwright`) or the subcommand (`test`).
+ * Caller values go through {@link callerArg}, which refuses option-like
+ * values, absolute paths and `..`. Throws {@link CallerArgError}.
+ */
+export function buildPlaywrightArgs(
+  input: PlaywrightRunInput,
+  runner: PlaywrightRunnerConfig,
+  resolved: ResolvedEnvironment | undefined,
+): PlaywrightArgv {
+  const safeTestPath = input.testPath ? callerArg(input.testPath, "testPath") : undefined;
+  const safeProject = input.project ? callerArg(input.project, "project") : undefined;
+
+  const args = ["playwright", "test"];
+  if (safeTestPath) args.push(safeTestPath);
+  if (safeProject) args.push("--project", safeProject);
+  if (input.headed) args.push("--headed");
+
+  // Operator-provided config file for non-default Playwright setups.
+  if (runner.configFile) args.push("--config", sanitizeArg(runner.configFile));
+
+  const extraEnv: Record<string, string> = {};
+  if (resolved?.baseUrl) extraEnv.PLAYWRIGHT_BASE_URL = resolved.baseUrl;
+
+  return { args, extraEnv, safeTestPath, safeProject };
+}
+
 export function registerRunPlaywrightTest(server: McpServer): void {
   server.registerTool(
     "run_playwright_test",
@@ -34,7 +82,10 @@ export function registerRunPlaywrightTest(server: McpServer): void {
         testPath: z
           .string()
           .optional()
-          .describe("Path to a spec file or directory, e.g. tests/login.spec.ts"),
+          .describe(
+            "Path to a spec file or directory, relative to the project, e.g. " +
+              'tests/login.spec.ts. Absolute paths, ".." and values starting with "-" are refused.',
+          ),
         headed: z
           .boolean()
           .optional()
@@ -53,24 +104,21 @@ export function registerRunPlaywrightTest(server: McpServer): void {
       },
     },
     async ({ testPath, headed, project, environment }) => {
-      // Strip control characters from caller-supplied values before they land
-      // in a command string a human may copy-paste (see sanitizeArg).
-      const safeTestPath = testPath ? sanitizeArg(testPath) : undefined;
-      const safeProject = project ? sanitizeArg(project) : undefined;
-
-      const args = ["playwright", "test"];
-      if (safeTestPath) args.push(safeTestPath);
-      if (safeProject) args.push("--project", safeProject);
-      if (headed) args.push("--headed");
-
-      // Operator-provided config file for non-default Playwright setups.
       const runner = getPlaywrightRunnerConfig();
-      if (runner.configFile) args.push("--config", sanitizeArg(runner.configFile));
-
       // Resolve the closed environment name to operator-provided config.
       const resolved = environment ? resolveEnvironment(environment) : undefined;
-      const extraEnv: Record<string, string> = {};
-      if (resolved?.baseUrl) extraEnv.PLAYWRIGHT_BASE_URL = resolved.baseUrl;
+
+      let argv: PlaywrightArgv;
+      try {
+        argv = buildPlaywrightArgs({ testPath, headed, project }, runner, resolved);
+      } catch (err) {
+        const message = err instanceof CallerArgError ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `run_playwright_test rejected its input: ${message}` }],
+        };
+      }
+      const { args, extraEnv, safeTestPath, safeProject } = argv;
 
       const command = `npx ${args.join(" ")}`;
 

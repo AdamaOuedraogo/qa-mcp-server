@@ -60,7 +60,7 @@ current features** — they will be built on the primitives described in the
 | ------------------- | ------------------------------ | ----------------------------------------------- |
 | run_playwright_test | Prepare a Playwright test run  | **Dry-run** — returns the command, does not run it |
 | run_cypress_test    | Prepare a Cypress test run     | **Dry-run** — returns the command, does not run it |
-| read_test_report    | Read a test report file safely | Active — reads from disk, size-capped           |
+| read_test_report    | Read a test report from inside the project | Active — confined to `QA_MCP_PROJECT_DIR`, bounded 20,000-byte read, returned as untrusted data |
 | triage_flaky_test   | Judge a failure: flaky (infrastructure, race, data), test error, likely regression or inconclusive, with evidence | Active — pure, deterministic, no process started |
 
 > **Dry-run by design.** By default the run tools return the exact command they
@@ -181,7 +181,7 @@ an explicit opt-in, controlled entirely by environment variables:
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `QA_MCP_EXECUTION_MODE` | `dry-run` or `live` | `dry-run` |
-| `QA_MCP_PROJECT_DIR` | Absolute path of the **only** directory tests may run in | — |
+| `QA_MCP_PROJECT_DIR` | Absolute path of the **only** directory tests may run in and reports may be read from | — |
 | `QA_MCP_EXEC_TIMEOUT_MS` | Max run time before the process is killed | `600000` |
 | `QA_MCP_BASE_URL_LOCAL` / `_STAGING` / `_PREPROD` / `_PRODUCTION` | Base URL per target environment (see below) | — |
 
@@ -190,6 +190,23 @@ Live execution runs only when **both** `QA_MCP_EXECUTION_MODE=live` **and**
 containing `..` are rejected, and execution goes through a single
 [execution adapter](docs/architecture.md#execution-model) that reuses the
 allowlisted, no-shell command helper.
+
+Caller-supplied values (`testPath`, `spec`, `project`, `browser`) are refused
+before they reach the adapter when they start with `-`, are absolute paths, or
+contain `..`: a caller can pick a spec inside the project but can neither pass
+an option to the runner nor point it elsewhere.
+
+`read_test_report` is confined the same way, and needs `QA_MCP_PROJECT_DIR`
+even in dry-run mode. Its `reportPath` must be relative to that directory;
+absolute paths, `..` and a symbolic link as the final path component are
+refused, the resolved path must lie inside the project and must be the same
+file as the opened descriptor, and at most 20,000 bytes are read from disk
+(a bounded read, stated in the output). Captured test output and report
+contents are returned between delimiter lines that carry a per-call random
+token, with a notice that they are data from a test run, not instructions.
+That wrapping is best-effort labelling, not a security boundary: a model can
+still be influenced by text inside the block. Returning these contents as
+structured content fields is a follow-up (see [ROADMAP.md](ROADMAP.md)).
 
 Example MCP client config pointing at a real Cypress project:
 
@@ -270,7 +287,7 @@ This server never exposes a generic shell to the model, because a QA capability 
 * easier to secure;
 * easier to extend.
 
-Every capability is explicitly designed, reviewed and documented. The walls this server has today are the execution boundary: a single execution path (`runInProject()`), allowlisted binaries (`npx`, `pnpm`, `node`), no shell, a working directory pinned to `QA_MCP_PROJECT_DIR`, a `..` traversal check, a timeout and an output cap. There is no sandbox, no egress allowlist and no approval gate yet. The approval gate that would hold a sensitive action until a code from outside the system releases it, in code rather than in a prompt, is a v0.3 primitive in [ROADMAP.md](ROADMAP.md), not a current control.
+Every capability is explicitly designed, reviewed and documented. The walls this server has today are the execution boundary: a single execution path (`runInProject()`), allowlisted binaries (`npx`, `pnpm`, `node`), no shell, a working directory pinned to `QA_MCP_PROJECT_DIR`, a `..` traversal check, caller values that cannot be options or absolute paths, report reads confined to the project directory and bounded in size, a timeout and an output cap. There is no sandbox, no egress allowlist and no approval gate yet. The approval gate that would hold a sensitive action until a code from outside the system releases it, in code rather than in a prompt, is a v0.3 primitive in [ROADMAP.md](ROADMAP.md), not a current control.
 
 ---
 
