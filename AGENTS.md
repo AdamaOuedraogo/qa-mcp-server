@@ -19,11 +19,13 @@ layers until repeated, real needs justify them.
 Link to these documents; do not copy them.
 
 - [README.md](README.md): public surface and configuration variables
-- [docs/vision.md](docs/vision.md): philosophy and the feature decision rule
+- [docs/vision.md](docs/vision.md): the problem, the thesis (method, guardrails,
+  trace), the three-layer design and the design principles
 - [docs/architecture.md](docs/architecture.md): register-function pattern, security model
 - [docs/connect-to-a-project.md](docs/connect-to-a-project.md): operator setup and execution modes
 - [ROADMAP.md](ROADMAP.md): direction and explicit non-goals
-- [CONTRIBUTING.md](CONTRIBUTING.md): contribution principles
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution principles and the feature
+  decision rule
 - [Flaky-test triage README](src/capabilities/flaky-test-triage/README.md) and its
   [reasoning spec](src/capabilities/flaky-test-triage/docs/reasoning.md)
 

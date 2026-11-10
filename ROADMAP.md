@@ -2,109 +2,108 @@
 
 This project follows a simple philosophy: **build → learn what is needed →
 document → publish what was actually built.** The roadmap is a direction, not a
-promise. Scope is kept deliberately small.
+promise. Scope is kept deliberately small, and the order follows the
+dependencies: you cannot evaluate what you do not observe, nor gate what you
+do not journal.
 
 ## Completed milestones
 
-What is already in place as of v0.1:
+What is already in place as of v0.1 and the first part of v0.2:
 
-- Foundation project created
-- Official MCP SDK
-- TypeScript + Node.js + pnpm
+- Foundation project created, official MCP SDK, TypeScript + Node.js + pnpm
 - Controlled QA tools (`run_playwright_test`, `run_cypress_test`, `read_test_report`)
 - Resources (`qa://test-strategy`, `qa://playwright-guidelines`)
-- Prompts (`generate-playwright-test`, `analyze-test-failure`)
+- Prompts (`generate-playwright-test`, `analyze-test-failure`, `flaky-test-triage`)
 - Safe command-execution utility (allowlist, no shell, timeout, output cap)
-- Documentation (README, Vision, Architecture, Contributing)
+- Opt-in real execution pinned to one project directory, through a single
+  execution adapter
+- First judgment capability: `triage_flaky_test` (pure, deterministic, tested)
+- Report adapters: Playwright JSON, Mochawesome, JUnit XML (internal)
+- Documentation (README, Vision, Architecture, Contributing, AGENTS.md, KEEP.md)
 
-## v0.1 — Foundation (current)
+## v0.2 — Real execution (opt-in), remaining items
 
-The clean, extensible MVP.
-
-- [x] TypeScript + Node.js + pnpm project using the official MCP SDK
-- [x] Controlled tools: `run_playwright_test`, `run_cypress_test`,
-      `read_test_report`
-- [x] Resources: `qa://test-strategy`, `qa://playwright-guidelines`
-- [x] Prompts: `generate-playwright-test`, `analyze-test-failure`
-- [x] Safe command-execution utility (allowlist, no shell, timeout, output cap)
-- [x] Documentation: README, vision, architecture, contributing
-
-## v0.2 — Real execution (opt-in)
-
-Turn the dry-run tools into safe, real runners.
-
-- [x] Opt-in real execution behind an explicit config flag / env var
-      (`QA_MCP_EXECUTION_MODE`, `QA_MCP_PROJECT_DIR`)
-- [x] Working-directory restriction (runs pinned to one configured project dir;
-      `..` path traversal rejected) via a dedicated execution adapter
+- [ ] Confine `read_test_report` to `QA_MCP_PROJECT_DIR`
+- [ ] Wrap report contents as untrusted data (delimiters, no instruction
+      following) before they reach the model
+- [ ] Tests for the execution boundary (`runCommand`, `runInProject`:
+      allowlist, path traversal, timeout, no `node -e` / `pnpm exec` escape)
 - [ ] Structured parsing of Playwright/Cypress results into typed output
-- [ ] Basic tests for the command utility and tool handlers
 
-## v0.3 — Richer reporting
+## v0.3 — Primitives
 
-- [ ] First-class Playwright JSON reporter parsing
-- [ ] JUnit XML parsing
-- [ ] Failure summarisation resource/tool built on real artifacts
+Four building blocks every later capability shares. Deterministic code, no
+model required.
+
+- [ ] **Journal and receipts**: a `run_id` per tool call; JSONL events per run
+      (`started`, `output`, `exit`, `timeout`); a receipt = report hash +
+      commit + environment + timestamp; a `read_run` tool
+- [ ] **Approval gate**: operator policy per action (`free` / `gated`),
+      `production` gated by default; a held action returns a `hold_id`, pings
+      a channel (ntfy first), and executes only after a code that comes from
+      outside the system and passes a strict validator; one release per hold;
+      codes found inside inputs are refused and journaled
+- [ ] **Evals**: an `evals/` folder of cases (input, expected judgment,
+      constraints) for the triage rules and the policy; a `pnpm eval` runner
+      that replays N times and reports pass@1 and pass^k; an optional
+      model-graded judge for prompts only where no deterministic check exists
+- [ ] **Delegation**: a `RUN.md` brief (commit, environment, suite, expected
+      format, way home); a `run_remote` tool that triggers a run elsewhere
+      (GitHub Actions first), polls with a deadline and a heartbeat, and brings
+      back report + receipt; a `compare_runs(local, remote)` capability that
+      aligns results by test name and commit
+- [ ] Optional container sandbox for live mode (compose + egress allowlist
+      proxy), documented as a reference setup
+
+## v0.4 — The QA lead's capabilities
+
+The job itself, built on the primitives. Each returns a structured judgment
+with evidence.
+
+- [ ] `define_test_strategy` — from requirements, code and knowledge base to a
+      prioritized P0 / P1 / P2 strategy and the quality gates it implies
+- [ ] `assess_release` — is this release ready to ship, against the gates,
+      with the runs and receipts that prove it
+- [ ] `validate_ticket` — is a ticket QA OK before production
+- [ ] `review_merge_request` — testability, risk and coverage of a change
+- [ ] `investigate_incident` — is a customer issue a real product bug, with
+      the evidence trail
+- [ ] Test generation: API and end-to-end tests (Playwright, Cypress) from
+      acceptance criteria, enforcing the gates
 
 ## Later — exploratory
 
 Only if they prove genuinely useful.
 
-- [ ] RAG over test suites, docs, and past failures
+- [ ] Connectors for first-class inputs: Jira, GitLab/GitHub, incident and
+      log platforms, knowledge bases
+- [ ] RAG over test suites, docs and past failures
 - [ ] Additional frameworks (Vitest, Jest, k6)
-- [ ] Trace/screenshot ingestion for `analyze-test-failure`
-- [ ] Optional agent workflows on top of the tools
+- [ ] Trace/screenshot ingestion for failure analysis
+- [ ] Notifications beyond ntfy (Slack, email)
 
-## Two layers: capabilities and workflows
+## Three layers
 
-A direction for how the pieces fit together — not a commitment to dates. See
-[docs/vision.md](docs/vision.md) and [docs/architecture.md](docs/architecture.md).
+How the pieces fit together. This repository owns the first layer only.
 
-**Layer 1 — low-level QA capabilities** (MCP tools/resources), grouped by
-domain. Some exist; most are future:
+| Layer | What it holds | Where it lives |
+| --- | --- | --- |
+| 1. Capabilities and primitives | The expertise, the guardrails, the trace | This repository, `src/` |
+| 2. Method as skills | How to chain capabilities for a strategy, a release, an incident | This repository, as skill and agent instructions (`AGENTS.md` today; skill folders are not created yet), not server code |
+| 3. Orchestration | Which agent does what, where, with which worker | The harness (Claude Code, Codex, a cloud session, CI); this repository only documents reference setups |
 
-- Jira — `read_jira_ticket` (acceptance criteria, business context)
-- GitLab — `read_merge_request`, `read_pipeline_status`
-- Testing — `run_playwright_test`, `run_cypress_test` — done
-- Knowledge — `read_test_strategy`, `read_business_rules`
-- Reports — `read_test_report` — done
-- Logs — `read_datadog_logs`
-
-**Layer 2 — QA workflows** that compose Layer 1 to model real QA work
-(not implemented):
-
-- `validate_ticket()` — decide whether a ticket is QA OK before production
-- `review_merge_request()` — QA-focused MR review (testability, risk, coverage)
-- `investigate_incident()` — decide whether a customer issue is a real product bug
-
-Consistent with the philosophy below: build the small capabilities first; the
-workflows only make sense once enough of them exist.
-
-## Long-term vision
-
-This repository focuses on building QA **capabilities**: small, safe, composable
-tools, resources, and prompts.
-
-Longer term, those capabilities could serve as the foundation that higher-level
-AI systems build on. Possible directions include:
-
-- Multi-agent QA systems
-- LangGraph workflows
-- CrewAI workflows
-- Reference QA agents
-- SDKs built on top of the server
-- Reusable QA capability libraries
-
-These are **not planned features**. They are directions that would only make
-sense if real adoption and real needs pull the project there. The guiding rule
-stays the same:
+Orchestration stays out of the server on purpose: harnesses improve every few
+months, and a capability server benefits from every improvement, while a
+home-made agent framework competes with them. Multi-agent setups, LangGraph or
+CrewAI workflows and reference QA agents are things people may build **on top
+of** this server; they are not planned features of it.
 
 > **Capabilities first. Frameworks later.**
 
-The current priority is unchanged: build small, safe, composable QA capabilities.
-
 ## Explicit non-goals for now
 
-- No generic terminal tool.
+- No generic terminal tool exposed to the model.
 - No arbitrary shell execution from the LLM.
+- No agent framework, workflow engine or orchestrator inside the server.
 - No large platform or web UI.
+- No model required to run the server.
