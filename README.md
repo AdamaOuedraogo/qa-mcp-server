@@ -1,18 +1,14 @@
 # QA MCP Server
 
-> **Don't give an AI a terminal. Give it QA capabilities.**
+> **Give an AI agent the QA lead's job — with method, guardrails and a trace.**
 
-`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that gives AI assistants safe, structured access to Quality Engineering work.
+`qa-mcp-server` is an open-source Model Context Protocol (MCP) server that exposes Quality Engineering as typed, testable capabilities. Judgment capabilities return structured assessments with evidence; supporting tools return bounded, explicitly untrusted observations.
 
-It starts with low-level, safe capabilities — running Playwright and Cypress, reading test reports, plus testing guidelines and reusable QA prompts. But Playwright and Cypress are execution details, not the center of the product. The first-class inputs of Quality Engineering are Jira tickets, merge requests, incidents, acceptance criteria, test strategy and business rules.
+Writing code is no longer the slow part of shipping software; knowing whether it holds is. This project exists to keep quality from becoming the bottleneck. It models the work of an experienced quality engineer — define a test strategy, set quality gates, generate and run tests, judge flaky failures and release readiness, investigate incidents — and makes that work available to any agent harness through MCP.
 
-The long-term objective is to support real QA workflows built on those capabilities — not to replace QA engineers, but to model and augment their work.
+It starts small and safe: running Playwright and Cypress, reading reports, triaging flaky tests. Those are execution details. The first-class inputs of Quality Engineering are requirements, tickets, source code, merge requests, incidents and business rules, and the direction is the full job built on four shared primitives planned for v0.3: a journal of runs, an approval gate, evals of the server's own judgment, and delegation contracts. None of them exists yet.
 
-> **The long-term objective is not to expose testing tools. It is to expose Quality Engineering capabilities that mirror the real work of QA engineers.**
-
-Instead of exposing a generic terminal, the server exposes purpose-built, typed QA capabilities:
-
-> Help AI agents become better Quality Engineers without giving them unrestricted access to your machine.
+> **Not a replacement for QA engineers: a multiplier of their judgment.**
 
 ---
 
@@ -24,7 +20,7 @@ Instead of exposing a generic terminal, the server exposes purpose-built, typed 
 * [Connect it to your project](#connect-it-to-your-project)
 * [Real execution (opt-in)](#real-execution-opt-in)
 * [Architecture](#architecture)
-* [Why not a Terminal?](#why-not-a-terminal)
+* [Why walls, not a terminal ban](#why-walls-not-a-terminal-ban)
 * [Core Design Principles](#core-design-principles)
 * [Roadmap](#roadmap)
 * [Vision](#vision)
@@ -36,47 +32,27 @@ Instead of exposing a generic terminal, the server exposes purpose-built, typed 
 
 # Why this project exists
 
-AI assistants are becoming increasingly capable of helping software teams.
+AI assistants generate features, fix bugs and open pull requests in minutes. What has not sped up is verification: is the requirement met, does the change break something else, is the release safe, is this incident a real bug.
 
-They can generate code.
+A team that ships ten times faster without ten times more verification accumulates invisible debt until an incident makes it visible. The test pyramid, test-driven development and quality gates are what make speed sustainable.
 
-They can review pull requests.
+An AI agent can carry that work, on one condition: it must receive three things nobody gives it by default.
 
-They can explain failures.
+1. **A method** — how to prioritize, how to judge a flaky test, when a release is ready. Expertise as explicit rules, not the model's mood.
+2. **Deterministic guardrails** — what the agent may never do on its own, whatever it is told. These must be enforced in code, not in a prompt.
+3. **A trace** — every judgment should carry its evidence, every run a receipt, so the work is observable, replayable and evaluable.
 
-The next logical step is helping engineers with software quality.
-
-Unfortunately, most AI integrations achieve this by exposing a generic terminal.
-
-While powerful, a terminal gives an AI access to far more than it actually needs.
-
-Quality Engineering doesn't require unlimited power.
-
-It requires well-designed capabilities.
-
-This project follows a different philosophy.
-
-Instead of exposing a shell, it exposes QA-specific tools that are:
-
-* typed
-* predictable
-* auditable
-* intentionally limited
-* safe by default
-
-The goal is not to let an AI do everything.
-
-The goal is to let it do the right things.
+Not more intelligence. Method, limits and memory. This is the intent: today's guardrails are the execution boundary described under [Real execution](#real-execution-opt-in), and the journal, receipts and approval gate are v0.3 roadmap items. See the full [Vision](docs/vision.md).
 
 ---
 
 # Current MVP
 
-The MVP is intentionally small: low-level, safe testing capabilities. Higher-level
-QA workflows such as `validate_ticket`, `review_merge_request` and
-`investigate_incident` are **long-term targets, not current features** — they will
-be built on top of smaller capabilities. See [Vision](#vision) and the
-[roadmap](ROADMAP.md).
+The MVP is intentionally small: low-level, safe testing capabilities plus one
+judgment capability. The QA lead's capabilities such as `validate_ticket`,
+`review_merge_request` and `investigate_incident` are **long-term targets, not
+current features** — they will be built on the primitives described in the
+[roadmap](ROADMAP.md). See also [Vision](#vision).
 
 ## Tools
 
@@ -85,6 +61,7 @@ be built on top of smaller capabilities. See [Vision](#vision) and the
 | run_playwright_test | Prepare a Playwright test run  | **Dry-run** — returns the command, does not run it |
 | run_cypress_test    | Prepare a Cypress test run     | **Dry-run** — returns the command, does not run it |
 | read_test_report    | Read a test report file safely | Active — reads from disk, size-capped           |
+| triage_flaky_test   | Judge a failure: flaky (infrastructure, race, data), test error, likely regression or inconclusive, with evidence | Active — pure, deterministic, no process started |
 
 > **Dry-run by design.** By default the run tools return the exact command they
 > *would* execute, without executing anything, so the server is safe to connect
@@ -108,6 +85,7 @@ be built on top of smaller capabilities. See [Vision](#vision) and the
 | ------------------------ | ---------------------------------------------- |
 | generate-playwright-test | Generate Playwright tests from requirements    |
 | analyze-test-failure     | Analyze test failures using available evidence |
+| flaky-test-triage        | Guide a flaky-test triage with `triage_flaky_test` |
 
 ---
 
@@ -210,7 +188,7 @@ an explicit opt-in, controlled entirely by environment variables:
 Live execution runs only when **both** `QA_MCP_EXECUTION_MODE=live` **and**
 `QA_MCP_PROJECT_DIR` are set. Runs are pinned to that directory, arguments
 containing `..` are rejected, and execution goes through a single
-[execution adapter](docs/architecture.md#future-execution-model) that reuses the
+[execution adapter](docs/architecture.md#execution-model) that reuses the
 allowlisted, no-shell command helper.
 
 Example MCP client config pointing at a real Cypress project:
@@ -281,22 +259,18 @@ The server acts as a controlled bridge between an AI assistant and the Quality E
 
 ---
 
-# Why not a Terminal?
+# Why walls, not a terminal ban
 
-A terminal is extremely flexible.
+Early versions of this project were framed as "no terminal for the AI". The real point is narrower: an agent may have a whole machine when that machine has walls.
 
-It is also extremely difficult to secure.
-
-This project intentionally avoids exposing arbitrary shell access.
-
-Instead, every capability is explicitly designed, reviewed and documented.
-
-This makes AI behaviour:
+This server never exposes a generic shell to the model, because a QA capability does not need one. The same design should hold when the agent runs in a sandbox with a full shell: an egress allowlist, a pinned working directory, an approval gate for sensitive actions. The walls are what make agent behaviour:
 
 * easier to understand;
 * easier to audit;
 * easier to secure;
 * easier to extend.
+
+Every capability is explicitly designed, reviewed and documented. The walls this server has today are the execution boundary: a single execution path (`runInProject()`), allowlisted binaries (`npx`, `pnpm`, `node`), no shell, a working directory pinned to `QA_MCP_PROJECT_DIR`, a `..` traversal check, a timeout and an output cap. There is no sandbox, no egress allowlist and no approval gate yet. The approval gate that would hold a sensitive action until a code from outside the system releases it, in code rather than in a prompt, is a v0.3 primitive in [ROADMAP.md](ROADMAP.md), not a current control.
 
 ---
 
@@ -328,65 +302,24 @@ Everything exposed by this server should be designed for both humans and AI assi
 
 # Roadmap
 
-The project will evolve incrementally.
+The project evolves incrementally, in the order the dependencies impose: you cannot evaluate what you do not observe, nor gate what you do not journal.
 
-## v0.1
+- **v0.1 — Foundation**: tools, resources, prompts, safe execution utility. Done.
+- **v0.2 — Real execution (opt-in)**: live runs pinned to one project directory. Done; structured results and execution-boundary tests still open.
+- **v0.3 — Primitives**: journal and receipts, approval gate, evals, delegation.
+- **v0.4 — The QA lead's capabilities**: `define_test_strategy`, `assess_release`, `validate_ticket`, `review_merge_request`, `investigate_incident`, built on the primitives.
 
-* Foundation
-* Project architecture
-* First QA tools
-* First QA resources
-* First QA prompts
-
-## v0.2
-
-* Real Playwright execution
-* Trace reader
-* HTML report reader
-
-## v0.3
-
-* Jira integration
-* GitHub integration
-* Slack notifications
-
-## Future
-
-As the project grows, additional capabilities may include:
-
-* RAG-powered QA knowledge
-* richer testing resources
-* advanced failure analysis
-* reference QA agents built on top of this server
-
-The focus, however, will always remain the same:
-
-Build useful Quality Engineering capabilities for AI assistants.
+Details, non-goals and the three-layer design are in [ROADMAP.md](ROADMAP.md).
 
 ---
 
 # Vision
 
-QA is becoming one of the first engineering disciplines where AI agents can provide immediate value.
+Quality is becoming the bottleneck of software delivery. This project gives agents the job of a QA lead — strategy, gates, tests, judgment, investigation — with the method, the guardrails and the trace that should let a company trust them with its releases. The method exists for flaky-test triage today; the guardrails are the execution boundary; the trace is planned.
 
-This project explores how AI assistants can safely interact with testing ecosystems through purpose-built capabilities rather than unrestricted system access.
+The server is one layer in a three-layer design, and the only one this repository owns: capabilities and primitives live here; the QA method lives in skills and agent instructions; orchestration (which agent does what, where) belongs to the harness you already use. Keeping orchestration out of the server is deliberate: harnesses improve every few months, and a capability server benefits from every improvement.
 
-This project is part of a larger learning journey called **Agentic Quality Lab**.
-
-The idea is simple:
-
-Build a real project.
-
-Learn only what is necessary to move it forward.
-
-Share what was actually built.
-
-Every new concept—MCP, RAG, memory, evaluation, AI agents—will first be implemented inside this project before being documented publicly.
-
-The repository therefore serves two purposes:
-
-* a useful open-source MCP server for Quality Engineering;
-* a living laboratory for exploring Agentic Quality Engineering.
+The repository keeps two roles: a useful server, and a living laboratory for agentic quality engineering, where every concept is built here before being written about.
 
 → Read the full [Vision document](docs/vision.md).
 

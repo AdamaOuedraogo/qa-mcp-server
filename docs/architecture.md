@@ -12,10 +12,12 @@ MCP client (Claude Desktop, IDE, ...)
    src/index.ts        ← entry point: transport + connect
         │
    src/server.ts       ← wiring only: registers everything
-        ├── tools/       controlled QA actions
-        ├── resources/   reference material (markdown)
-        ├── prompts/     reusable QA reasoning templates
-        └── utils/       safe command execution helper
+        ├── tools/         controlled QA actions
+        ├── capabilities/  QA expertise as judgment (flaky-test-triage)
+        ├── resources/     reference material (markdown)
+        ├── prompts/       reusable QA reasoning templates
+        ├── execution/     the only path to a live process (runInProject)
+        └── utils/         safe command execution helper
 ```
 
 ## Layers
@@ -64,10 +66,10 @@ process. It is designed to enforce:
 - **working directory** — execution pinned to an explicit `cwd`,
 - **output size limit** — captured output is truncated.
 
-In the MVP, the run tools describe the command they *would* execute (dry run)
-rather than executing it, keeping the server safe to connect anywhere by
-default. The runner exists so enabling real execution later is a small,
-reviewable change.
+By default the run tools describe the command they *would* execute (dry run)
+rather than executing it, keeping the server safe to connect anywhere. Live
+execution is an explicit operator opt-in that reaches this runner only through
+the execution adapter (see [Execution model](#execution-model)).
 
 ## Execution pipeline
 
@@ -82,8 +84,8 @@ LLM tool call
 3. Sanitization     sanitizeArg() strips control characters from values
 4. Handler          the tool's own logic builds the argument list
 5. Security boundary allowlist + no-shell (runCommand); not crossed in dry run
-6. Execution        dry run today (command is described, not run);
-                    real execution in a future version
+6. Execution        dry run by default (command is described, not run);
+                    live only when the operator opts in, via runInProject()
 7. Response         structured content returned to the client
 ```
 
@@ -107,28 +109,37 @@ which may itself be relaying untrusted content.
 - **No shell.** When a process is run, `runCommand` passes arguments as an array
   with `shell: false` against an allowlist — there is no string interpolation to
   exploit.
-- **Dry run by default.** The run tools do not execute anything in the MVP, so
-  connecting the server has no side effects.
+- **Dry run by default.** The run tools execute nothing unless the operator
+  sets both `QA_MCP_EXECUTION_MODE=live` and `QA_MCP_PROJECT_DIR`, so
+  connecting the server has no side effects by default.
 
-Real execution, when added, must not weaken these properties: it should sit
-behind an explicit security boundary rather than being wired directly into a
-handler.
+Real execution does not weaken these properties: it sits behind an explicit
+security boundary rather than being wired directly into a handler.
 
-## Future execution model
+These are the controls that exist today. There is no journal, no approval
+gate, no sandbox and no egress allowlist yet; the vision describes them as
+intent and [ROADMAP.md](../ROADMAP.md) places them in v0.3. `read_test_report`
+is not yet confined to `QA_MCP_PROJECT_DIR` (tracked in
+[issue #7](https://github.com/AdamaOuedraogo/qa-mcp-server/issues/7)).
 
-Enabling real Playwright/Cypress runs should be an additive, reviewable change,
-not a rewrite. The intended shape:
+## Execution model
+
+Real Playwright/Cypress runs are implemented as an additive layer, not a
+rewrite:
 
 - **Execution adapter.** Handlers do not spawn processes directly. They hand a
-  validated, sanitized request to an adapter that owns process execution via
-  `runCommand`. This keeps the security boundary in one auditable place.
-- **Opt-in.** Real execution is disabled unless explicitly enabled (e.g. a
-  config flag / environment variable), so the safe behaviour remains the
-  default.
-- **Isolation when appropriate.** For untrusted or higher-risk runs, the adapter
-  may execute inside an isolated environment — a container (such as Docker) or
-  another sandbox. This is *one possible implementation*, not the goal itself;
-  the requirement is isolation, and the mechanism can vary.
+  validated, sanitized request to `runInProject()` in `src/execution/adapter.ts`,
+  which owns process execution via `runCommand`. This keeps the security
+  boundary in one auditable place.
+- **Opt-in.** Live execution is disabled unless the operator sets both
+  `QA_MCP_EXECUTION_MODE=live` and `QA_MCP_PROJECT_DIR` (read in
+  `src/config.ts`), so the safe behaviour remains the default. Runs are pinned
+  to that directory and arguments containing `..` are rejected.
+- **Isolation when appropriate (direction).** For untrusted or higher-risk
+  runs, the adapter may later execute inside an isolated environment — a
+  container or another sandbox. This is *one possible implementation*, not the
+  goal itself; the requirement is isolation, and the mechanism can vary. See
+  the optional sandbox item in [ROADMAP.md](../ROADMAP.md).
 
 The vision is the boundary and the opt-in, not any specific sandbox technology.
 
@@ -137,7 +148,9 @@ The vision is the boundary and the opt-in, not any specific sandbox technology.
 Adding a capability follows the same **one file + one register function**
 pattern everywhere:
 
-1. Create a file in `src/tools/`, `src/resources/`, or `src/prompts/`.
+1. Create a file in `src/tools/`, `src/resources/`, or `src/prompts/`, or a
+   folder under `src/capabilities/` for a capability that encodes QA expertise
+   (rules, evaluator, schema and tests next to its MCP exposure).
 2. Export a `register<Name>(server)` function that declares the capability
    (name, description, `zod` schema where applicable, and a handler).
 3. For tools that take free-form values, run them through `sanitizeArg()`.
@@ -146,45 +159,33 @@ pattern everywhere:
 No other file needs to change. The composition root stays declarative, and each
 capability remains independently readable, reviewable, and testable.
 
-## Capability and workflow layers (direction)
+## Three layers (direction)
 
-The current tools, resources, and prompts are **Layer 1**: low-level, typed,
-safe capabilities. The intended direction adds more Layer 1 connectors and a
-**Layer 2** of QA workflows that compose them. This section is direction, not
-current implementation.
+The server is one layer in a three-layer design, and the only one this
+repository owns as code. The table and its rationale live in
+[docs/vision.md](vision.md) and [ROADMAP.md](../ROADMAP.md); this section only
+maps them onto `src/`.
 
-```text
-                   QA Agent
-                       │
-                       ▼
-              QA MCP Server
-      ┌─────────┬──────────┬──────────┬──────────┐
-      │         │          │          │          │
-    Jira     GitLab     Testing    Knowledge   Logs
-      │         │          │          │          │
-      ▼         ▼          ▼          ▼          ▼
- Acceptance    MR      Playwright  Test       Datadog
- Criteria    Pipeline   Cypress    Strategy    Logs
-                         Reports    Business
-                                    Rules
-```
+- **Layer 1 — capabilities and primitives (`src/`).** Typed tools, resources
+  and prompts, plus capabilities that return a judgment with evidence. Today
+  this is the run tools, `read_test_report`, the two resources, the three
+  prompts and `triage_flaky_test`. The roadmap adds shared primitives (journal
+  and receipts, approval gate, evals, delegation) and the QA lead's
+  capabilities (`define_test_strategy`, `assess_release`, `validate_ticket`,
+  `review_merge_request`, `investigate_incident`). Those are capabilities in
+  `src/`, each a pure judgment over a structured observation, not workflows
+  that orchestrate other tools inside the server.
+- **Layer 2 — method as skills.** How to chain capabilities for a strategy, a
+  release or an incident. This lives in agent and skill instructions in the
+  repository, not in server code.
+- **Layer 3 — orchestration.** Which agent does what, where, with which
+  worker. This belongs to the harness; the repository only documents reference
+  setups.
 
-**Layer 1 — low-level QA capabilities.** One concrete action or read each,
-grouped by domain (Jira, GitLab, Testing, Knowledge, Reports, Logs). Examples:
-`read_jira_ticket`, `read_merge_request`, `read_pipeline_status`,
-`run_playwright_test`, `run_cypress_test`, `read_test_report`,
-`read_datadog_logs`, `read_test_strategy`, `read_business_rules`. Only the
-testing, reports and knowledge building blocks exist today.
-
-**Layer 2 — QA workflows.** Higher-level skills that orchestrate many Layer 1
-capabilities to model real QA work: `validate_ticket()`,
-`review_merge_request()`, `investigate_incident()`. Not implemented yet; see
-[docs/vision.md](vision.md) for what each is intended to do.
-
-Each Layer 2 workflow should stay a thin orchestrator over Layer 1. The
-capabilities keep the security properties (typed inputs, no shell, explicit
-execution boundary); the workflow only sequences them and reasons over the
-results. This keeps the security model unchanged as the surface grows.
+Connectors to first-class inputs (tickets, merge requests, incidents, logs,
+knowledge bases) are exploratory roadmap items, not a planned layer. Whatever
+is added, the security properties of Layer 1 (typed inputs, no shell, explicit
+execution boundary) stay unchanged as the surface grows.
 
 ## Design decisions
 

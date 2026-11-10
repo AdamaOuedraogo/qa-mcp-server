@@ -6,7 +6,8 @@ very welcome.
 
 ## Philosophy
 
-Please read [`docs/vision.md`](docs/vision.md) first. The guiding rule is:
+Please read [`docs/vision.md`](docs/vision.md) first. The guiding rule, stated
+in [`ROADMAP.md`](ROADMAP.md), is:
 
 > Build → learn what is needed → document → publish what was actually built.
 
@@ -56,6 +57,8 @@ pnpm dev         # run the server over stdio
 - `src/tools/` — one controlled tool per file
 - `src/resources/` — one resource per file
 - `src/prompts/` — one reusable prompt per file
+- `src/capabilities/` — one folder per capability that encodes QA expertise
+- `src/execution/` — the execution adapter, the only path to a live process
 - `src/utils/` — shared helpers (e.g. safe command execution)
 - `src/server.ts` — wiring only; no business logic
 - `docs/` — vision and architecture
