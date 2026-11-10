@@ -114,13 +114,29 @@ which may itself be relaying untrusted content.
   spec path, a project or browser name) are refused when they start with `-`,
   are absolute, or contain `..` (`src/tools/callerArgs.ts`), so a caller can
   neither pass an option to the runner nor point it outside the project.
-- **Report reads are confined and bounded.** `read_test_report` resolves its
-  path only inside `QA_MCP_PROJECT_DIR`, refuses absolute paths and `..`,
-  resolves symbolic links with `realpath` and refuses a target outside the
-  project, and reads at most 20,000 bytes from disk.
-- **Output is data.** Captured test output and report contents are returned
-  inside explicit untrusted-data delimiters with a one-line notice
-  (`src/utils/untrusted.ts`), so the model reads them as data, not instructions.
+- **Report reads are confined, bound to the descriptor, and bounded.**
+  `read_test_report` refuses absolute paths and `..`, then opens the file
+  first (with `O_NOFOLLOW` where the platform has it, so the final component
+  cannot be a symbolic link), checks that the descriptor is a regular file,
+  resolves the path with `realpath`, refuses a target outside
+  `QA_MCP_PROJECT_DIR`, and refuses unless the resolved path and the open
+  descriptor are the same file (device and inode). The read of at most
+  20,000 bytes then uses the descriptor, never the path again. Threat model:
+  the containment decision is bound to the opened file, not to a pathname
+  that could change between a check and the open. Limitations: on a platform
+  without `O_NOFOLLOW` (Windows) a final-component link is followed and only
+  the containment and identity checks protect; an intermediate directory
+  swapped between the open and the `realpath` is caught by the identity
+  comparison, which refuses rather than reads; a hard link inside the project
+  to an outside file is indistinguishable by inode, so write access to the
+  project directory stays trusted. This is not a filesystem sandbox.
+- **Output is labelled as data, best effort.** Captured test output and report
+  contents are returned between delimiter lines that carry a per-call random
+  token, with a one-line notice (`src/utils/untrusted.ts`), so a body cannot
+  forge the closing line and the model is told the block is data. This is
+  labelling, not a security boundary: a textual wrapper cannot force a model
+  to ignore text inside the block. Returning these contents as structured MCP
+  content fields is a follow-up in [ROADMAP.md](../ROADMAP.md).
 - **Dry run by default.** The run tools execute nothing unless the operator
   sets both `QA_MCP_EXECUTION_MODE=live` and `QA_MCP_PROJECT_DIR`, so
   connecting the server has no side effects by default.

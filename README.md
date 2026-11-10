@@ -198,11 +198,15 @@ an option to the runner nor point it elsewhere.
 
 `read_test_report` is confined the same way, and needs `QA_MCP_PROJECT_DIR`
 even in dry-run mode. Its `reportPath` must be relative to that directory;
-absolute paths and `..` are refused, symbolic links are resolved and a target
-outside the project is refused, and at most 20,000 bytes are read from disk
+absolute paths, `..` and a symbolic link as the final path component are
+refused, the resolved path must lie inside the project and must be the same
+file as the opened descriptor, and at most 20,000 bytes are read from disk
 (a bounded read, stated in the output). Captured test output and report
-contents are returned inside explicit untrusted-data delimiters with a notice
-that they are data from a test run, not instructions.
+contents are returned between delimiter lines that carry a per-call random
+token, with a notice that they are data from a test run, not instructions.
+That wrapping is best-effort labelling, not a security boundary: a model can
+still be influenced by text inside the block. Returning these contents as
+structured content fields is a follow-up (see [ROADMAP.md](ROADMAP.md)).
 
 Example MCP client config pointing at a real Cypress project:
 

@@ -26,6 +26,7 @@ found: gh at /usr/bin/gh
 - `pnpm build` compiles the `*.test.ts` files into `dist/` as well, because the include pattern is `src/**/*.ts` with no exclusion · source: tsconfig.json:17 · how: ran
 - `pnpm test` only runs the five explicit path patterns in the script; a test in a new folder is silently skipped until the script lists it · source: package.json:35 · how: read
 - every `pnpm <script>` on this machine first prints a `[WARN] The install that runs before scripts failed` line (pnpm 10 wants `pnpm approve-builds` for build scripts); the script still runs and the warning is not a failure · source: package.json:35 · how: ran
+- opening a symbolic link with `O_RDONLY | O_NOFOLLOW` on Linux fails with error code `ELOOP`, which `readReport()` maps to its final-component refusal; the test that asserts that message passes here · source: src/tools/readTestReport.test.ts:80 · how: ran
 
 ## Receipts
 command: pnpm test (first run, before the test expectation was corrected; excerpt)
@@ -86,4 +87,11 @@ command: pnpm install --frozen-lockfile 2>&1 | tail -3
   help: Run "pnpm approve-builds" to pick which dependencies should be allowed
         to run scripts.
 
+```
+command: pnpm test 2>&1 | grep -E "^ℹ (tests|pass|fail|skipped)|not ok|✖|AssertionError|actual|expected" | head -30
+```
+ℹ tests 63
+ℹ pass 63
+ℹ fail 0
+ℹ skipped 0
 ```

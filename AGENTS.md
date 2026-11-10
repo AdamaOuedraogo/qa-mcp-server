@@ -138,9 +138,12 @@ intentions. Current limitations to keep in mind:
 
 - The configured working directory and the `..` check are not a filesystem
   sandbox.
-- `read_test_report` is confined to `QA_MCP_PROJECT_DIR` by path checks and
-  `realpath`; that is not a filesystem sandbox either, and it needs the variable
-  even in dry-run mode.
+- `read_test_report` is confined to `QA_MCP_PROJECT_DIR` by path checks,
+  `O_NOFOLLOW` where available, `realpath` and a device/inode comparison with
+  the opened descriptor; that is not a filesystem sandbox either, and it needs
+  the variable even in dry-run mode.
+- The untrusted-data delimiters around test output and report text are
+  best-effort labelling with a per-call token, not a security boundary.
 - Free-form caller strings are stripped of control characters and refused when
   option-like, absolute or containing `..`; they are not allowlisted.
 - Live test code runs with the server's privileges and environment.

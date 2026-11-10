@@ -34,6 +34,9 @@ What is already in place as of v0.1 and the first part of v0.2:
       allowlist, path traversal, timeout, output cap, no `node -e` /
       `pnpm exec` escape through any registered tool)
 - [ ] Structured parsing of Playwright/Cypress results into typed output
+- [ ] Return captured test output and report contents as structured MCP
+      content fields rather than inside text delimiters; the current wrapping
+      is best-effort labelling, not a security boundary
 
 ## v0.3 — Primitives
 
