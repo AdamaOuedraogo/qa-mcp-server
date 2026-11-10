@@ -37,10 +37,24 @@ Turn the dry-run tools into safe, real runners.
       (`QA_MCP_EXECUTION_MODE`, `QA_MCP_PROJECT_DIR`)
 - [x] Working-directory restriction (runs pinned to one configured project dir;
       `..` path traversal rejected) via a dedicated execution adapter
-- [ ] Structured parsing of Playwright/Cypress results into typed output
+- [x] Structured parsing of Playwright/Cypress results into typed output
+      (flaky-test triage adapters: Playwright JSON, Mochawesome, JUnit XML)
 - [ ] Basic tests for the command utility and tool handlers
 
-## v0.3 — Richer reporting
+## v0.3 — QA expertise capabilities (current)
+
+Capabilities that return judgment, not data.
+
+- [x] `triage_flaky_test` — flaky family vs. real regression, with a safe-repair contract
+- [x] `audit_test_suite` — day-one static audit: maturity per axis, findings with
+      file:line evidence, hotspots, Diagnose → Prototype → Adopt plan
+- [x] `assess_test_strategy` — practice-level assessment from a typed questionnaire;
+      unknowns become questions, gaps become a 30/60/90 plan and service offers
+- [x] `qa://audit-rubric` resource and `qa-audit` prompt
+- [ ] Run-data enrichment: feed CI history into the audit so reliability findings
+      carry measured flakiness instead of static smells
+
+## v0.4 — Richer reporting
 
 - [ ] First-class Playwright JSON reporter parsing
 - [ ] JUnit XML parsing
