@@ -275,6 +275,7 @@ export function analyseRunnerConfig(configFile: string | undefined, source: stri
   const retries = source.match(/retries\s*:\s*(\d+)/)?.[1];
   const retriesTernary = /retries\s*:\s*process\.env\.CI\s*\?\s*(\d+)/.exec(source)?.[1];
   const workersNum = source.match(/workers\s*:\s*(\d+)/)?.[1];
+  const workersCi = /workers\s*:\s*process\.env\.CI\s*\?\s*(\d+)/.exec(source)?.[1];
   const workersPct = source.match(/workers\s*:\s*['"`](\d+%)['"`]/)?.[1];
   const projects = (source.match(/\bname\s*:\s*['"`][^'"`]+['"`]/g) ?? []).length;
   const timeout = source.match(/^\s*timeout\s*:\s*(\d+)/m)?.[1];
@@ -287,6 +288,7 @@ export function analyseRunnerConfig(configFile: string | undefined, source: stri
     configFile,
     retries: retriesTernary !== undefined ? Number(retriesTernary) : retries !== undefined ? Number(retries) : undefined,
     workers: workersPct ?? (workersNum !== undefined ? Number(workersNum) : undefined),
+    workersInCi: workersCi !== undefined ? Number(workersCi) : undefined,
     fullyParallel: bool(/fullyParallel\s*:\s*true/, source),
     reporters: [...reporters].sort(),
     traceOnFailure:

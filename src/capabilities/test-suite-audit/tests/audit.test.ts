@@ -713,3 +713,47 @@ test("an excerpt carrying an instruction and a fake closing delimiter comes back
     await cleanup(base);
   }
 });
+
+// --- SPD-001: only an explicit single worker is serial -------------------------
+
+async function spd001For(config: string): Promise<{ fired: boolean; text?: string; workers?: unknown; workersInCi?: unknown }> {
+  const { base, project } = await tempProject();
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    for (let i = 0; i < 10; i++) {
+      await writeFile(join(project, "tests", `s${i}.spec.ts`), `test("t${i}", async () => { expect(1).toBe(1); });\n`);
+    }
+    await writeFile(join(project, "playwright.config.ts"), config);
+    const obs = await scanProject(project);
+    const f = auditTestSuite(obs).findings.find((x) => x.id === "SPD-001");
+    return { fired: Boolean(f), text: f?.observation, workers: obs.runnerConfig.workers, workersInCi: obs.runnerConfig.workersInCi };
+  } finally {
+    await cleanup(base);
+  }
+}
+
+test("SPD-001 stays silent on Playwright's default workers (no workers, no fullyParallel)", async () => {
+  const r = await spd001For(`export default defineConfig({ testDir: "tests" });\n`);
+  assert.equal(r.workers, undefined);
+  assert.equal(r.fired, false, "default workers run spec files in parallel");
+});
+
+test("SPD-001 stays silent on fullyParallel: false, which still runs files in parallel", async () => {
+  const r = await spd001For(`export default defineConfig({ fullyParallel: false });\n`);
+  assert.equal(r.fired, false);
+});
+
+test("SPD-001 fires on an explicit workers: 1, and on a CI ternary that resolves to 1", async () => {
+  const explicit = await spd001For(`export default defineConfig({ workers: 1 });\n`);
+  assert.equal(explicit.workers, 1);
+  assert.equal(explicit.fired, true);
+  assert.match(explicit.text ?? "", /`workers: 1`.*Run time itself was not measured/);
+
+  const ci = await spd001For(`export default defineConfig({ workers: process.env.CI ? 1 : undefined });\n`);
+  assert.equal(ci.workersInCi, 1);
+  assert.equal(ci.fired, true);
+  assert.match(ci.text ?? "", /one worker on CI/);
+
+  const many = await spd001For(`export default defineConfig({ workers: process.env.CI ? 4 : undefined });\n`);
+  assert.equal(many.fired, false);
+});

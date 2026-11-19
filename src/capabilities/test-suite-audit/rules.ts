@@ -329,19 +329,25 @@ const noLint: Rule = (obs) => {
 
 // --- Feedback speed ----------------------------------------------------------
 
+// Playwright runs spec *files* in parallel by default (workers default to half
+// the CPU cores); fullyParallel only adds parallelism *within* a file. So only
+// an explicit single worker is serial. This is a configuration fact, not a
+// measured feedback time.
 const noParallelism: Rule = (obs) => {
   if (obs.framework === "cypress" || !obs.runnerConfig.configFile) return undefined; // Cypress parallelism is a cloud/CI concern (handled by SPD-002)
-  const { fullyParallel, workers } = obs.runnerConfig;
-  if (fullyParallel || (typeof workers === "number" && workers > 1) || typeof workers === "string") return undefined;
+  const { workers, workersInCi } = obs.runnerConfig;
+  const serial = workers === 1 || workersInCi === 1;
+  if (!serial) return undefined;
   if (obs.specs.length < 10) return undefined;
+  const where = workers === 1 ? "`workers: 1`" : "`workers: process.env.CI ? 1 : …` (one worker on CI)";
   return {
     id: "SPD-001",
     axis: "feedback_speed",
     severity: "medium",
-    title: "Suite runs serially",
-    observation: `${obs.specs.length} spec files; fullyParallel is not enabled and workers is ${workers ?? "default"}.`,
-    impact: "Feedback time grows linearly with coverage, so adding tests makes the pipeline slower and teams start skipping it.",
-    recommendation: "Enable fullyParallel, make tests independent (own data, no shared order), then shard across CI jobs.",
+    title: "Runner is configured with a single worker",
+    observation: `${obs.specs.length} spec files; the runner config sets ${where}, so spec files run one after another. Run time itself was not measured.`,
+    impact: "With one worker, feedback time grows linearly with coverage, so adding tests makes the pipeline slower and teams start skipping it.",
+    recommendation: "Find out why a single worker was chosen (shared state, a fragile environment). Make tests independent (own data, no shared order), raise or remove the workers override, then shard across CI jobs; compare run times before and after.",
     effort: "M",
     quickWin: false,
     basis: "observed",

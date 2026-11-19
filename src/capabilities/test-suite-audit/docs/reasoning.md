@@ -68,11 +68,15 @@ affected, so a 3-file demo and a 300-file suite are judged the same way.
 
 | Rule | Flags | Severity logic |
 | --- | --- | --- |
-| SPD-001 | Playwright, ≥10 specs, no `fullyParallel`/`workers>1` | medium |
+| SPD-001 | Playwright, ≥10 specs, config sets a single worker (`workers: 1`, or `workers: process.env.CI ? 1 : …`) | medium |
 | SPD-002 | E2E job in CI, ≥20 specs, no `parallel:`/matrix/`--shard` | medium |
 | SPD-003 | E2E job without a dependency/browser cache | low |
 
 Cypress parallelism is a CI/cloud concern, so SPD-001 is Playwright-only.
+Playwright runs spec files in parallel by default, and `fullyParallel` only
+adds parallelism within a file, so neither a missing `workers` nor
+`fullyParallel: false` is serial. SPD-001 states the configuration; it does
+not claim a measured run time.
 
 ### Coverage & risk — "what does a red pipeline actually block?"
 

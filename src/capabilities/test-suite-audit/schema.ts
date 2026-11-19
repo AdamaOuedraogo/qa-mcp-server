@@ -57,6 +57,7 @@ export const RunnerConfigObservationSchema = z.object({
   configFile: z.string().optional(),
   retries: z.number().int().nonnegative().optional(),
   workers: z.union([z.number().int().positive(), z.string()]).optional(),
+  workersInCi: z.number().int().positive().optional().describe("Workers when CI is set, from `workers: process.env.CI ? N : …`."),
   fullyParallel: z.boolean().optional(),
   reporters: z.array(z.string()).describe("Reporter names seen, e.g. html, json, junit, list."),
   traceOnFailure: z.boolean().optional().describe("Playwright trace: 'on-first-retry'/'retain-on-failure'/'on'."),
