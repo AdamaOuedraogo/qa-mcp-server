@@ -5,23 +5,25 @@ import type { CiObservation } from "./schema.js";
  * CI analysis: GitLab and GitHub Actions files in, a CiObservation out.
  *
  * No YAML parser (no new dependency): files are split into jobs by
- * indentation, conservatively. The rule that keeps it honest:
+ * indentation, conservatively. The principle (docs/reasoning.md): a CI
+ * behaviour is stated only with structural and semantic evidence; otherwise
+ * it is undefined with a reason. An abstention is for a construct this file
+ * does not support, never a cover for misreading one it does.
  *
  *   A setting counts for the E2E job only when it sits in the job that runs
- *   the command. When it is absent from that job but present elsewhere in the
- *   file (another job, `default:`, a template), or the job inherits from
- *   somewhere this splitter does not follow (`extends:`, `<<:`, `!reference`,
- *   a reusable workflow, a local action), the setting is *not established*
- *   (undefined). It is `false` only when it appears nowhere.
+ *   the command. It is `false` only when the construct that would carry it
+ *   was fully read and does not carry it. Present elsewhere (another job,
+ *   `default:`, a template), inherited (`extends:`, `<<:`, `!reference`, an
+ *   alias, a reusable workflow, a local action) or in an unsupported form, it
+ *   is not established.
  *
  * The run command must sit in a job's `script:`/`before_script:` (GitLab) or
- * in a step's `run:` / `uses: cypress-io/github-action` (GitHub). The same
- * text in `variables:`, `env:` or a template does not make an E2E job.
+ * be the direct `run` / `uses: cypress-io/github-action` of an item of
+ * `jobs.<job>.steps` (GitHub), in command position.
  *
  * A disabled job (`when: never`, `if: false`, a hidden `.template`) is not an
  * E2E job. A manual-only job, or one allowed to fail, is not a merge-request
- * gate. Anything this splitter cannot decide is left undefined, so the rules
- * report it as not observed rather than as observed.
+ * gate. GitLab rules are read, not evaluated.
  */
 
 /**
@@ -57,6 +59,21 @@ export function commandBasis(text: string): CommandBasis | undefined {
     if (SCRIPT_RUN.test(c)) best = "inferred";
   }
   return best;
+}
+
+/** A direct E2E command that shards or parallelises the run itself. */
+const SHARD_ARG = /(?:^|\s)--shard(?:=|\s)\S+|(?:^|\s)cypress\s+run\b.*\s--parallel\b/;
+
+/**
+ * Sharding of the E2E run, from its command and the job's concurrency:
+ * true with a shard argument; false only for a direct command with neither
+ * a shard argument nor concurrency; otherwise not established.
+ */
+function shardingOf(commands: string, basis: CommandBasis | undefined, concurrency: string | undefined): { value?: boolean; why?: string } {
+  if (logicalCommands(commands).some((c) => SHARD_ARG.test(" " + c))) return { value: true };
+  if (basis !== "observed") return { why: "the E2E command is a package script whose body was not read" };
+  if (concurrency) return { why: `${concurrency} without a shard argument in the E2E command; the runner may read the node index itself` };
+  return { value: false };
 }
 
 /** A line that holds a run command. */
@@ -489,11 +506,56 @@ function parseGitlab(path: string, src: string): ParsedFile {
     }
     at.artifacts = childRange(b, "artifacts", off)?.start;
     at.junit = firstLine(lines, childRange(b, "artifacts", off), /^\s*junit\s*:/);
-    at.parallel = childRange(b, "parallel", off)?.start ?? firstLine(lines, childRange(b, "script", off), /--shard[= ]/);
+    at.parallel = firstLine(lines, childRange(b, "script", off), /--shard|--parallel/) ?? childRange(b, "parallel", off)?.start;
     at.retry = childRange(b, "retry", off)?.start;
     at.cache = childRange(b, "cache", off)?.start;
-    const retryBlock = child(b, "retry");
-    const retryText = textOf(retryBlock);
+    const unread: Job["unread"] = {};
+    const settings: Job["settings"] = { artifacts: false, junit: false, parallel: false, retry: false, cache: false };
+
+    const artB = child(b, "artifacts");
+    if (artB) {
+      settings.artifacts = true;
+      const artInl = readInline(artB.inline);
+      if (artInl.kind !== "empty") unread.junit = `artifacts: uses an unsupported form (${artInl.kind === "unsupported" ? artInl.why : "inline value"})`;
+      else {
+        const reports = child(artB, "reports");
+        const repInl = reports ? readInline(reports.inline) : undefined;
+        if (reports && repInl?.kind !== "empty") unread.junit = "artifacts:reports uses an unsupported form";
+        else settings.junit = Boolean(reports && child(reports, "junit"));
+      }
+    }
+
+    const par = child(b, "parallel");
+    const sh = shardingOf(scripts, commandBasis(scripts), par ? `parallel: ${par.inline || "matrix"}` : undefined);
+    if (sh.value) settings.parallel = true;
+    else if (sh.why) unread.parallel = sh.why;
+
+    const retryB = child(b, "retry");
+    if (retryB) {
+      const inl = readInline(retryB.inline);
+      if (inl.kind === "scalar") settings.retry = /^[12]$/.test(inl.value);
+      else if (inl.kind === "empty") {
+        const max = child(retryB, "max");
+        const maxV = max ? readInline(max.inline) : undefined;
+        const whenB = child(retryB, "when");
+        const whenSeq = seqOf(whenB);
+        if (maxV?.kind !== "scalar" || "unsupported" in whenSeq) unread.retry = "retry: uses an unsupported form";
+        else {
+          const whens = whenSeq.items.map((i) => i.scalar ?? "");
+          const onTestFailure = !whenB || whens.includes("always") || whens.includes("script_failure");
+          settings.retry = /^[12]$/.test(maxV.value) && onTestFailure;
+        }
+      } else unread.retry = `retry: uses an unsupported form (${inl.kind === "unsupported" ? inl.why : "sequence"})`;
+    }
+
+    const cacheB = child(b, "cache");
+    if (cacheB) {
+      const inl = readInline(cacheB.inline);
+      if (inl.kind === "empty") settings.cache = true;
+      else if (inl.kind === "seq") settings.cache = inl.items.length > 0;
+      else unread.cache = `cache: uses an unsupported form (${inl.kind === "unsupported" ? inl.why : "scalar"})`;
+    }
+
     jobs.push({
       file: path,
       name: b.key,
@@ -510,14 +572,8 @@ function parseGitlab(path: string, src: string): ParsedFile {
       scheduled,
       why,
       at,
-      unread: {},
-      settings: {
-        artifacts: Boolean(child(b, "artifacts")),
-        junit: /^\s*junit\s*:/m.test(textOf(child(b, "artifacts"))),
-        parallel: Boolean(child(b, "parallel")) || /--shard[= ]/.test(scripts),
-        retry: Boolean(retryBlock) && /^\s*[12]\s*$|max\s*:\s*[12]\b/m.test(retryText),
-        cache: Boolean(child(b, "cache")),
-      },
+      unread,
+      settings,
     });
   }
   return { path, lines, jobs, includesOthers: top.some((b) => b.key === "include") };
@@ -672,6 +728,16 @@ function parseGithub(path: string, src: string): ParsedFile {
         const v = c ? readInline(c.inline) : undefined;
         return v?.kind === "scalar" && v.value !== "" && v.value !== "false";
       });
+      const cyParallel = steps.find((st) => {
+        const v = keyOf(st.with, "parallel");
+        const r = v ? readInline(v.inline) : undefined;
+        return st.uses !== undefined && /^cypress-io\/github-action@/.test(st.uses) && r?.kind === "scalar" && r.value === "true";
+      });
+      const matrix = /^\s*matrix\s*:/m.test(textOf(child(b, "strategy")));
+      const runText = commandSteps.map((st) => st.run ?? "").join("\n");
+      const runBasis = commandSteps.some((st) => st.uses !== undefined) ? "observed" : commandBasis(runText);
+      const ghShard = cyParallel ? { value: true } : shardingOf(runText, runBasis, matrix ? "strategy: matrix" : undefined);
+      if (ghShard.why) unread.parallel ??= ghShard.why;
       const art = firstUses(/^actions\/upload-artifact@/);
       const junit = firstUses(JUNIT_ACTIONS);
       const retry = firstUses(RETRY_ACTIONS);
@@ -686,6 +752,7 @@ function parseGithub(path: string, src: string): ParsedFile {
         junit: junit?.usesLine,
         retry: retry?.usesLine,
         cache: cache?.usesLine,
+        parallel: cyParallel?.usesLine ?? (ghShard.value ? commandSteps.find((st) => /--shard|--parallel/.test(st.run ?? ""))?.runLine : undefined),
       };
 
       jobs.push({
@@ -709,7 +776,7 @@ function parseGithub(path: string, src: string): ParsedFile {
         settings: {
           artifacts: Boolean(art),
           junit: Boolean(junit),
-          parallel: /^\s*matrix\s*:/m.test(textOf(child(b, "strategy"))) || /--shard[= ]/.test(commands),
+          parallel: ghShard.value === true,
           retry: Boolean(retry),
           cache: Boolean(cache),
         },

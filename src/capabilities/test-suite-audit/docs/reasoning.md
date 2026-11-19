@@ -142,8 +142,25 @@ jobs come from `include:`/a reusable workflow, the absence of an E2E job is
 A setting counts for the E2E job only when it sits in that job. Absent from
 the job but present elsewhere (another job, GitLab `default:`, a template), or
 inherited through `extends:`/`<<:`/`!reference`/a local action, it is *not
-established* (`undefined`) and the rule reports `not_observed`. It is `false`,
-an observed absence, only when it appears nowhere in the file.
+established* (`undefined`) and the rule reports `not_observed`.
+
+`false` is a claim too: a setting is false only when the construct that
+would carry it was fully read and does not carry it. Per setting:
+- sharding: true only with a shard argument in the E2E command (`--shard`,
+  Cypress `--parallel`, the Cypress action's `parallel: true`); false only for
+  a direct command with no concurrency and no shard argument. `parallel: N` or
+  a matrix without a shard argument, or a command that is only an inferred
+  package script, is not established;
+- JUnit: GitLab needs the `artifacts → reports → junit` path (a `junit.xml`
+  under `paths` is not it); GitHub needs a known reporter action, else it is
+  not established, never false;
+- retry: GitLab `retry: 1|2`, or `max: 1|2` with `when` absent or including
+  `always`/`script_failure`, is blanket; `retry: 0` or a `when` limited to
+  infrastructure failures is not; GitHub needs a known retry action;
+- cache: a GitLab `cache:` block is a cache, `cache: []` is not; GitHub needs
+  `actions/cache` or a `with.cache` that is not false;
+- any of these in an unsupported form, or carried by a step that uses an
+  action that was not read, is not established.
 
 GitLab rules are read, not evaluated. A rule is *unconditional* when it has
 no `if`, no `changes` and no `exists`; an unconditional first rule decides

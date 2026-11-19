@@ -347,3 +347,66 @@ test("commands supported: a package script named e2e is an inferred E2E job, and
   assert.equal(o.ci.artifactsPublished, false);
   assert.equal(obs003?.basis, "inferred", "the job itself was only inferred from a script name");
 });
+
+// --- Setting semantics: false only when the carrier was fully read ------------
+
+test("sharding: concurrency without a shard argument, or an unread script, is not established", () => {
+  const glPar = gitlab(`e2e:\n  parallel: 4\n  script: [npx playwright test]\n`);
+  assert.equal(glPar.ci.parallelOrSharded, undefined);
+  assert.match(glPar.ci.reasons?.parallelOrSharded ?? "", /parallel: 4 without a shard argument/);
+
+  const ghMatrix = github(`on: [pull_request]\njobs:\n  e2e:\n    strategy:\n      matrix:\n        node: [18, 20]\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(ghMatrix.ci.parallelOrSharded, undefined);
+
+  const script = gitlab(`e2e:\n  script: [pnpm test:e2e]\n`);
+  assert.equal(script.ci.parallelOrSharded, undefined, "the script body may shard; it was not read");
+  assert.match(script.ci.reasons?.parallelOrSharded ?? "", /package script/);
+  assertNoPositiveClaim(script, ["parallelOrSharded"]);
+});
+
+test("JUnit, retry and cache on GitLab: unsupported forms abstain, limited retries are not blanket", () => {
+  const flowArt = gitlab(`e2e:\n  script: [npx playwright test]\n  artifacts: {reports: {junit: report.xml}}\n`);
+  assert.equal(flowArt.ci.junitReportWired, undefined);
+  assert.equal(flowArt.ci.artifactsPublished, true, "the artifacts key is there");
+  assertTrueValuesHaveEvidence(flowArt);
+
+  const pathsOnly = gitlab(`e2e:\n  script: [npx playwright test]\n  artifacts:\n    paths: [junit.xml]\n`);
+  assert.equal(pathsOnly.ci.junitReportWired, false, "a file named junit.xml in paths is not artifacts:reports:junit");
+
+  const infraRetry = gitlab(`e2e:\n  script: [npx playwright test]\n  retry:\n    max: 2\n    when: [runner_system_failure, stuck_or_timeout_failure]\n`);
+  assert.equal(infraRetry.ci.blanketJobRetry, false, "retries infrastructure failures only");
+
+  const flowRetry = gitlab(`e2e:\n  script: [npx playwright test]\n  retry: {max: 2, when: [runner_system_failure]}\n`);
+  assert.equal(flowRetry.ci.blanketJobRetry, undefined);
+  assert.match(flowRetry.ci.reasons?.blanketJobRetry ?? "", /unsupported form/);
+
+  const noCache = gitlab(`e2e:\n  script: [npx playwright test]\n  cache: []\n`);
+  assert.equal(noCache.ci.dependencyCache, false, "cache: [] disables caching");
+  const flowCache = gitlab(`e2e:\n  script: [npx playwright test]\n  cache: {key: x, paths: [node_modules]}\n`);
+  assert.equal(flowCache.ci.dependencyCache, undefined);
+});
+
+test("settings supported: shard arguments, Cypress parallel, reports:junit, retry forms and cache blocks", () => {
+  const gl = gitlab(
+    `e2e:\n  parallel: 3\n  script:\n    - npx playwright test --shard=$CI_NODE_INDEX/$CI_NODE_TOTAL\n  artifacts:\n    when: always\n    reports:\n      junit: results.xml\n  retry:\n    max: 2\n    when: script_failure\n  cache:\n    paths: [node_modules]\n`,
+  );
+  assert.equal(gl.ci.parallelOrSharded, true);
+  assert.equal(gl.ci.junitReportWired, true);
+  assert.equal(gl.ci.blanketJobRetry, true);
+  assert.equal(gl.ci.dependencyCache, true);
+  assert.equal(gl.ci.artifactsPublished, true);
+  assertTrueValuesHaveEvidence(gl);
+
+  const plain = gitlab(`e2e:\n  script: [npx playwright test]\n  retry: 1\n`);
+  assert.equal(plain.ci.blanketJobRetry, true);
+  assert.equal(plain.ci.parallelOrSharded, false, "a direct command with no concurrency and no shard argument");
+  assert.equal(gitlab(`e2e:\n  script: [npx playwright test]\n  retry: 0\n`).ci.blanketJobRetry, false);
+
+  const cy = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: cypress-io/github-action@v6\n        with:\n          parallel: true\n          record: true\n`);
+  assert.equal(cy.ci.parallelOrSharded, true);
+  assertTrueValuesHaveEvidence(cy);
+
+  const cyCli = gitlab(`e2e:\n  parallel: 2\n  script: [npx cypress run --record --parallel]\n`);
+  assert.equal(cyCli.ci.parallelOrSharded, true);
+  assertTrueValuesHaveEvidence(cyCli);
+});
