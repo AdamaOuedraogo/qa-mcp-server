@@ -27,6 +27,9 @@ found: gh at /usr/bin/gh
 - `pnpm test` only runs the five explicit path patterns in the script; a test in a new folder is silently skipped until the script lists it · source: package.json:35 · how: read
 - every `pnpm <script>` on this machine first prints a `[WARN] The install that runs before scripts failed` line (pnpm 10 wants `pnpm approve-builds` for build scripts); the script still runs and the warning is not a failure · source: package.json:35 · how: ran
 - opening a symbolic link with `O_RDONLY | O_NOFOLLOW` on Linux fails with error code `ELOOP`, which `readReport()` maps to its final-component refusal; the test that asserts that message passes here · source: src/tools/readTestReport.test.ts:80 · how: ran
+- the audit scanner's `readCapped()` sizes its buffer to `min(size, maxBytes)` and fills it with positional reads, so it reads at most the per-file cap (issue #5) · source: src/capabilities/test-suite-audit/scanner.ts:422 · how: read
+- the existing `src/capabilities/*/tests/*.test.ts` pattern in the test script already picks up both audit test files: 20 tests in `test-suite-audit`, 5 in `test-strategy-assessment` · source: package.json:35 · how: ran
+- after rebasing the audit capabilities onto the boundary-hardening merge, `pnpm test` runs 88 tests (63 before), all passing · source: package.json:35 · how: ran
 
 ## Receipts
 command: pnpm test (first run, before the test expectation was corrected; excerpt)
@@ -92,6 +95,18 @@ command: pnpm test 2>&1 | grep -E "^ℹ (tests|pass|fail|skipped)|not ok|✖|Ass
 ```
 ℹ tests 63
 ℹ pass 63
+ℹ fail 0
+ℹ skipped 0
+```
+command: for f in src/capabilities/test-suite-audit/tests/audit.test.ts src/capabilities/test-strategy-assessment/tests/assessment.test.ts; do echo "$f: $(node --import tsx --test $f 2>&1 | grep -E '^ℹ tests')"; done
+```
+src/capabilities/test-suite-audit/tests/audit.test.ts: ℹ tests 20
+src/capabilities/test-strategy-assessment/tests/assessment.test.ts: ℹ tests 5
+```
+command: pnpm test 2>&1 | grep -E "^ℹ (tests|pass|fail|skipped)|not ok" (after the rebase onto main)
+```
+ℹ tests 88
+ℹ pass 88
 ℹ fail 0
 ℹ skipped 0
 ```
