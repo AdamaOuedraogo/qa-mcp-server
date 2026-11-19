@@ -262,6 +262,24 @@ function childRange(b: Block, key: string, bodyOffset: number): { start: number;
   return c ? { start: bodyOffset + c.start, end: bodyOffset + c.end } : undefined;
 }
 
+/** A key that appears twice at the same level of a block (YAML keeps the last one). */
+function duplicateKey(b: Block): string | undefined {
+  const ind = childIndent(b.body);
+  if (ind === undefined) return undefined;
+  const seen = new Set<string>();
+  for (const c of blocksAt(b.body, ind)) {
+    if (seen.has(c.key)) return c.key;
+    seen.add(c.key);
+  }
+  return undefined;
+}
+
+/** Commands whose content is not in the CI file: a local script, a shell file, make and similar runners. */
+const OPAQUE = /^(?:\.{0,2}\/\S+|(?:ba|z|da)?sh\s+(?:-\S+\s+)*[^-\s]\S*|make\b|just\b|task\b)/;
+function opaqueCommand(text: string): string | undefined {
+  return logicalCommands(text).find((c) => OPAQUE.test(c));
+}
+
 /** First line in [start, end) whose text matches `re`. */
 type Matcher = { test(line: string): boolean };
 function firstLine(lines: string[], range: { start: number; end: number } | undefined, re: Matcher): number | undefined {
@@ -277,6 +295,10 @@ interface Job {
   commands: string;
   /** How the job's E2E command was recognised, if it has one. */
   basis?: CommandBasis;
+  /** A command whose content was not read (a local script, make…), if any. */
+  opaque?: string;
+  /** The job starts a child pipeline (GitLab trigger:). */
+  triggers?: boolean;
   /** Full text of the job's block. */
   text: string;
   /** Line range of the job in the file, to look for settings elsewhere. */
@@ -305,8 +327,10 @@ interface ParsedFile {
   path: string;
   lines: string[];
   jobs: Job[];
-  /** The file may pull jobs from elsewhere (GitLab `include:`, a GitHub reusable workflow). */
+  /** The file may pull jobs from elsewhere (GitLab `include:`, a trigger job, a GitHub reusable workflow). */
   includesOthers: boolean;
+  /** Why the file's shared defaults were not fully read (GitLab `include:` may define `default:`). */
+  defaultsUnread?: string;
 }
 
 // --- GitLab -------------------------------------------------------------------
@@ -447,7 +471,12 @@ function parseGitlab(path: string, src: string): ParsedFile {
         manualOnly = manualOnly || (live.length > 0 && live.every((r) => r.when === "manual"));
       }
     }
-    if (!disabled && inherits) enabledUnknown = inheritWhy;
+    const dup = duplicateKey(b);
+    if (dup && !hidden) {
+      // Whatever the first copy says, YAML keeps the last one: the state is unknown.
+      disabled = false;
+      enabledUnknown = `the job repeats the key ${dup}:; YAML keeps the last one, which this reader does not resolve`;
+    } else if (!disabled && inherits) enabledUnknown = inheritWhy;
     else if (!disabled && rulesWhy) enabledUnknown = rulesWhy;
     else if (!disabled && whenB && whenInl?.kind !== "scalar") enabledUnknown = "when: uses an unsupported form";
     if (enabledUnknown) manualOnly = false;
@@ -561,6 +590,8 @@ function parseGitlab(path: string, src: string): ParsedFile {
       name: b.key,
       commands: scripts,
       basis: commandBasis(scripts),
+      opaque: opaqueCommand(scripts),
+      triggers: Boolean(child(b, "trigger")),
       text,
       start: b.start,
       end: b.end,
@@ -576,7 +607,14 @@ function parseGitlab(path: string, src: string): ParsedFile {
       settings,
     });
   }
-  return { path, lines, jobs, includesOthers: top.some((b) => b.key === "include") };
+  const include = top.some((b) => b.key === "include");
+  return {
+    path,
+    lines,
+    jobs,
+    includesOthers: include || jobs.some((j) => j.triggers),
+    defaultsUnread: include ? "the file has include:, and the included files (which may set default:) were not read" : undefined,
+  };
 }
 
 // --- GitHub Actions -------------------------------------------------------------
@@ -734,6 +772,7 @@ function parseGithub(path: string, src: string): ParsedFile {
       const reusable = Boolean(child(b, "uses"));
       if (reusable) includesOthers = true;
       const disabled = /^(false|\$\{\{\s*false\s*\}\})$/.test(jobIf);
+      const dup = duplicateKey(b);
       const continueOnError = /^true$/.test(unquote(child(b, "continue-on-error")?.inline ?? ""));
       const manualOnly = !disabled && manualFile;
 
@@ -815,7 +854,9 @@ function parseGithub(path: string, src: string): ParsedFile {
         text,
         start: offset + b.start,
         end: offset + b.end,
-        disabled,
+        disabled: disabled && !dup,
+        enabledUnknown: dup ? `the job repeats the key ${dup}:; YAML keeps the last one, which this reader does not resolve` : undefined,
+        opaque: opaqueCommand(steps.map((st) => st.run ?? "").join("\n")),
         manualOnly,
         inherits: reusable || steps.some((st) => st.uses?.startsWith("./")),
         mergeRequestGate,
@@ -851,6 +892,7 @@ function settingFor(job: Job, file: ParsedFile, s: Setting): { value?: boolean; 
   if (job.settings[s]) return { value: true };
   if (job.unread[s]) return { why: job.unread[s] };
   if (job.inherits) return { why: "the job inherits from a template, a reusable workflow or a local action that was not read" };
+  if (file.defaultsUnread) return { why: file.defaultsUnread };
   const elsewhere = [...file.lines.slice(0, job.start), ...file.lines.slice(job.end)].join("\n");
   return SETTING_ELSEWHERE[s].test(elsewhere) ? { why: "the setting appears elsewhere in the file, not in the E2E job" } : { value: false };
 }
@@ -938,12 +980,21 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
   }
   if (e2e.length === 0) {
     const textHit = parsed.find((p) => MENTION.test(p.lines.join("\n")));
+    const trigger = parsed.flatMap((p) => p.jobs).find((j) => j.triggers && !j.disabled);
+    const opaque = parsed.flatMap((p) => p.jobs).find((j) => j.opaque && !j.disabled);
+    const dupJob = parsed.flatMap((p) => p.jobs).find((j) => j.enabledUnknown);
     const inherits = parsed.find((p) => p.includesOthers || p.jobs.some((j) => j.inherits && !j.disabled));
     const reason = textHit
       ? `an E2E command appears in ${textHit.path} outside any enabled job's own script (variables, a template, an extended or disabled job)`
-      : inherits
-        ? `${inherits.path} pulls jobs or steps from elsewhere (include, extends, a reusable workflow or a local action) that were not read`
-        : undefined;
+      : trigger
+        ? `job ${trigger.name} in ${trigger.file} starts a child pipeline (trigger:) that was not read`
+        : opaque
+          ? `job ${opaque.name} in ${opaque.file} runs ${opaque.opaque}, whose content was not read`
+          : dupJob
+            ? `job ${dupJob.name} in ${dupJob.file}: ${dupJob.enabledUnknown}`
+            : inherits
+              ? `${inherits.path} pulls jobs or steps from elsewhere (include, extends, a reusable workflow or a local action) that were not read`
+              : undefined;
     return { ...base, e2eJobPresent: false, ...(reason ? { e2eJobNotEstablished: reason } : {}) };
   }
 

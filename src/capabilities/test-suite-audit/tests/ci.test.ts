@@ -465,3 +465,41 @@ test("triggers supported: scalar, flow list and block keys, types with synchroni
   assert.equal(push.ci.runsOnMergeRequest, undefined);
   assert.match(push.ci.reasons?.runsOnMergeRequest ?? "", /no pull_request trigger/);
 });
+
+// --- Unsupported constructs abstain, with a reason ----------------------------
+
+test("unsupported: include: makes absent settings not established, never false", () => {
+  const o = gitlab(`include:\n  - project: org/ci\n    file: defaults.yml\ne2e:\n  script: [npx playwright test]\n`);
+  assert.equal(o.ci.e2eJobPresent, true);
+  for (const f of ["artifactsPublished", "dependencyCache", "blanketJobRetry", "junitReportWired"] as const) {
+    assert.equal(o.ci[f], undefined, f);
+    assert.match(o.ci.reasons?.[f] ?? "", /include:/, f);
+  }
+  assertTrueValuesHaveEvidence(o);
+});
+
+test("unsupported: trigger jobs, local scripts and make leave the E2E job's absence not established", () => {
+  const trig = gitlab(`e2e:\n  trigger:\n    include: ci/e2e.yml\n`);
+  assert.equal(trig.ci.e2eJobPresent, false);
+  assert.match(trig.ci.e2eJobNotEstablished ?? "", /child pipeline \(trigger:\)/);
+
+  for (const cmd of ["./scripts/e2e.sh", "bash ci/run-tests.sh", "sh -c 'npm test'", "make e2e"]) {
+    const o = gitlab(`tests:\n  script:\n    - ${cmd}\n`);
+    assert.equal(o.ci.e2eJobPresent, false, cmd);
+    assert.match(o.ci.e2eJobNotEstablished ?? "", /whose content was not read/, cmd);
+  }
+  const gh = github(`on: [pull_request]\njobs:\n  tests:\n    steps:\n      - run: ./ci/e2e.sh\n`);
+  assert.match(gh.ci.e2eJobNotEstablished ?? "", /whose content was not read/);
+});
+
+test("unsupported: a job with a duplicate key does not establish an E2E job", () => {
+  const o = gitlab(`e2e:\n  when: never\n  script: [npx playwright test]\n  when: on_success\n`);
+  assert.equal(o.ci.e2eJobPresent, false);
+  assert.match(o.ci.e2eJobNotEstablished ?? "", /repeats the key when:/);
+});
+
+test("supported, not opaque: a job of known commands only gives an observed absence", () => {
+  const o = gitlab(`lint:\n  script:\n    - npm ci\n    - npm run lint\n`);
+  assert.equal(o.ci.e2eJobPresent, false);
+  assert.equal(o.ci.e2eJobNotEstablished, undefined, "every command was read; none runs E2E");
+});

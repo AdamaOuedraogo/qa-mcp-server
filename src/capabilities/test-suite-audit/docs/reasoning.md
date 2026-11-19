@@ -186,6 +186,13 @@ leaves the gate undefined; `merge_group` gates. The schedule is `false` only
 when `on:` was fully read and has no `schedule` key. A job or step with its
 own `if:`, or a reusable workflow (`workflow_call`), leaves both undefined.
 
+Unsupported constructs abstain with a reason: GitLab `include:` (included
+files may set `default:`, so an absent setting is not established), a
+`trigger:` job (the child pipeline is not read), a job that runs a local
+script, a shell file, `make`, `just` or `task` (the absence of an E2E job is
+not established), and a job that repeats a key (YAML keeps the last one; the
+job's enabled state is unknown).
+
 Gates: a disabled job (`when: never`, `if: false`, a hidden `.template`) is
 not an E2E job. A manual-only job (`when: manual`, a GitHub workflow with only
 `workflow_dispatch`) or one allowed to fail (`allow_failure`,
