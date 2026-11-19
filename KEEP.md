@@ -29,6 +29,9 @@ found: gh at /usr/bin/gh
 - opening a symbolic link with `O_RDONLY | O_NOFOLLOW` on Linux fails with error code `ELOOP`, which `readReport()` maps to its final-component refusal; the test that asserts that message passes here · source: src/tools/readTestReport.test.ts:80 · how: ran
 - the audit scanner reads every file through `openConfined()` with `fill: true`, which sizes the buffer to `min(size, maxBytes)` and fills it with positional reads, so it reads at most the per-file cap (issue #5); `read_test_report` does not pass `fill` and keeps its single read · source: src/utils/confinedRead.ts:168 · how: read
 - every `*.test.ts` under `src/` is matched by one of the five patterns in the test script, including the audit, strategy and `confinedRead` test files, and the per-file counts add up to the `pnpm test` total · source: package.json:35 · how: ran
+- the new `tests/ci.test.ts` is matched by the existing `src/capabilities/*/tests/*.test.ts` pattern; no script change was needed · source: package.json:35 · how: ran
+- `ci.test.ts` checks that every true CI value carries `ci.evidence` pointing at a line inside an enabled E2E job (or, for a GitHub gate, at the trigger key in `on:`) · source: src/capabilities/test-suite-audit/tests/ci.test.ts:42 · how: read
+- the CI reader applies one flow-style rule to the whole file: scalars and flow sequences of scalars are read, every other flow value abstains · source: src/capabilities/test-suite-audit/ci.ts:183 · how: read
 - the audit capabilities rebased onto the boundary-hardening merge pass the full `pnpm test` suite with no test changes; the count grows with each later commit, so run the suite rather than rely on a number here · source: package.json:35 · how: ran
 - the MCP SDK drops an argument key that is not in a tool's input schema before the handler runs: a call to `audit_test_suite` with a `beforeRead` key returns a normal audit, not an error · source: src/capabilities/test-suite-audit/tests/audit.test.ts:651 · how: ran
 - the criticality-tag detector accepts `@p0`, `@p1`, `@p2` and `@critical` only; scope and execution tags (`@smoke`, `@sanity`, `@regression`, `@nightly`, `@slow`, `@wip`) are collected separately and do not satisfy COV-001 · source: src/capabilities/test-suite-audit/scanner.ts:156 · how: read
@@ -139,4 +142,38 @@ command: pnpm test 2>&1 | grep -E "^ℹ (tests|suites|pass|fail|skipped|todo)"
 command: node --import tsx --input-type=module -e '<in-memory MCP client calls audit_test_suite with arguments { beforeRead: "x" }>' (excerpt)
 ```
 isError: undefined | # Test Suite Audit /  / **Playwright suite at maturity level 3/4 (managed) — 8 finding(s), 0 critical, 4 fixable in a short PR.** /  / 1 spec file(s) / 1 test(s) analysed. Weakest axis: coverage and risk (defined). 2 high-severity issue(s) drive most of the risk. Scan completeness 40% — runner config not found (retries, reporters, traces, parallelism not judged); no CI definition found (gate, artifacts, sharding not judged); package.json not found or unparsable (scripts, dependencies not judged). /  / Audited root: QA_MCP_PROJECT_DIR
+```
+command: pnpm test 2>&1 | grep -E "^ℹ (tests|suites|pass|fail|skipped|todo)" (after the second review of PR #3)
+```
+ℹ tests 150
+ℹ suites 0
+ℹ pass 150
+ℹ fail 0
+ℹ skipped 0
+ℹ todo 0
+```
+command: total=0; for f in src/*.test.ts src/tools/*.test.ts src/execution/*.test.ts src/utils/*.test.ts src/capabilities/*/tests/*.test.ts; do [ -e "$f" ] || continue; n=$(node --import tsx --test "$f" 2>&1 | sed -n 's/^ℹ tests //p'); total=$((total+n)); printf "%4s  %s\n" "$n" "$f"; done; echo "sum: $total"
+```
+   5  src/runners.test.ts
+  15  src/tools/readTestReport.test.ts
+   7  src/tools/runTools.test.ts
+   7  src/execution/adapter.test.ts
+  10  src/utils/command.test.ts
+   8  src/utils/confinedRead.test.ts
+   3  src/utils/untrusted.test.ts
+  16  src/capabilities/flaky-test-triage/tests/evaluator.test.ts
+   5  src/capabilities/test-strategy-assessment/tests/assessment.test.ts
+  43  src/capabilities/test-suite-audit/tests/audit.test.ts
+  29  src/capabilities/test-suite-audit/tests/ci.test.ts
+   2  src/capabilities/test-suite-audit/tests/vocabulary.test.ts
+sum: 150
+```
+command: node --input-type=module -e '<MCP stdio client on dist/index.js: list, audit the fixture, path ../../, then QA_MCP_PROJECT_DIR unset>'
+```
+tools: 6 | prompts: 4 | resources: 3
+audit isError: false | **Playwright suite at maturity level 1/4 (ad hoc) — 19 finding(s), 2 critical, 18 fixable in a short PR.**
+finding ids: GOV-001 COV-003 MNT-001 REL-001 REL-004 OBS-001 REL-005 OBS-002 OBS-003 GOV-002 GOV-004 COV-004 COV-006 REL-002 REL-003 MNT-004 MNT-007 SPD-003 COV-002
+evidence wrapped: true | JSON wrapped: true
+path ../../ -> true | Refused: "../../" is absolute or escapes the audited root. U
+unset QA_MCP_PROJECT_DIR -> true | Refused: audit_test_suite needs QA_MCP_PROJECT_DIR: it reads
 ```
