@@ -31,7 +31,7 @@ found: gh at /usr/bin/gh
 - every `*.test.ts` under `src/` is matched by one of the five patterns in the test script, including the audit, strategy and `confinedRead` test files, and the per-file counts add up to the `pnpm test` total · source: package.json:35 · how: ran
 - the audit capabilities rebased onto the boundary-hardening merge pass the full `pnpm test` suite with no test changes; the count grows with each later commit, so run the suite rather than rely on a number here · source: package.json:35 · how: ran
 - the MCP SDK drops an argument key that is not in a tool's input schema before the handler runs: a call to `audit_test_suite` with a `beforeRead` key returns a normal audit, not an error · source: src/capabilities/test-suite-audit/tests/audit.test.ts:651 · how: ran
-- the priority-tag detector accepts `@p0` to `@p3`, one level more than the P0 / P1 / P2 vocabulary · source: src/capabilities/test-suite-audit/scanner.ts:154 · how: read
+- the criticality-tag detector accepts `@p0`, `@p1`, `@p2` and `@critical` only; scope and execution tags (`@smoke`, `@sanity`, `@regression`, `@nightly`, `@slow`, `@wip`) are collected separately and do not satisfy COV-001 · source: src/capabilities/test-suite-audit/scanner.ts:156 · how: read
 
 ## Receipts
 command: pnpm test (first run, before the test expectation was corrected; excerpt)

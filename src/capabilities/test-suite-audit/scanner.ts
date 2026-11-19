@@ -152,7 +152,11 @@ const PAGE_OBJECT_IMPORT = [
   /test\.extend\s*</,
   /\bimport\s*{[^}]*\btest\b[^}]*}\s*from\s+['"`]\.{1,2}\//, // custom fixture-based test
 ];
-const PRIORITY_TAG = /@(p[0-3]|smoke|sanity|critical|regression|nightly|slow|wip)\b/gi;
+// Criticality of the journey a test covers (P0 / P1 / P2), not defect priority.
+const CRITICALITY_TAG = /@(p[0-2]|critical)(?![\w-])/gi;
+// When or how a test runs: scope and execution tags. Reported separately; they
+// do not say how critical a journey is, so they never satisfy COV-001.
+const SCOPE_TAG = /@(smoke|sanity|regression|nightly|slow|wip)(?![\w-])/gi;
 // Inline assertions, plus calls to helpers whose *name* says they assert
 // (`verifyTotal()`, `assertLoggedIn()`, `checkoutPage.shouldShowError()`).
 // This is a heuristic: a helper named `confirmOrder()` that asserts inside
@@ -195,9 +199,11 @@ export function analyseSpec(path: string, source: string, cap = DEFAULTS.maxOccu
     usesSemanticLocators: false,
     usesPageObjectOrFixture: false,
     priorityTags: [],
+    scopeTags: [],
   };
 
   const tags = new Set<string>();
+  const scope = new Set<string>();
   let depth = 0; // brace depth, to know when we're inside a test body
   let inTest = false;
   let testDepth = 0;
@@ -217,11 +223,9 @@ export function analyseSpec(path: string, source: string, cap = DEFAULTS.maxOccu
       testDepth = depth;
       testHasAssertion = false;
     }
-    if (TEST_BLOCK.test(raw) || DESCRIBE_BLOCK.test(raw)) {
-      for (const m of raw.matchAll(PRIORITY_TAG)) tags.add(m[0].toLowerCase());
-    }
-    if (/grep\s*:|tag\s*:|tags\s*:/.test(raw)) {
-      for (const m of raw.matchAll(PRIORITY_TAG)) tags.add(m[0].toLowerCase());
+    if (TEST_BLOCK.test(raw) || DESCRIBE_BLOCK.test(raw) || /grep\s*:|tag\s*:|tags\s*:/.test(raw)) {
+      for (const m of raw.matchAll(CRITICALITY_TAG)) tags.add(m[0].toLowerCase());
+      for (const m of raw.matchAll(SCOPE_TAG)) scope.add(m[0].toLowerCase());
     }
 
     if (matchAny(raw, HARD_WAIT)) pushOcc(obs.hardWaits, n, raw, cap);
@@ -258,6 +262,7 @@ export function analyseSpec(path: string, source: string, cap = DEFAULTS.maxOccu
   }
 
   obs.priorityTags = [...tags].sort();
+  obs.scopeTags = [...scope].sort();
   return obs;
 }
 

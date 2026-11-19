@@ -419,15 +419,21 @@ const noCiCache: Rule = (obs) => {
 
 const noPrioritisation: Rule = (obs) => {
   if (obs.specs.length === 0) return undefined;
+  // Only criticality tags count; scope/execution tags say when a test runs.
   const tagged = obs.specs.filter((s) => s.priorityTags.length > 0).length;
   const share = pct(tagged, obs.specs.length);
   if (share >= 50) return undefined;
+  const scopeOnly = obs.specs.filter((s) => s.priorityTags.length === 0 && (s.scopeTags ?? []).length > 0).length;
   return {
     id: "COV-001",
     axis: "coverage_and_risk",
     severity: share === 0 ? "high" : "medium",
-    title: "Tests are not prioritised by risk",
-    observation: `${tagged} of ${obs.specs.length} spec files (${share}%) carry a priority or scope tag (@p0, @smoke, @critical…).`,
+    title: "Tests are not tagged by journey criticality",
+    observation:
+      `${tagged} of ${obs.specs.length} spec files (${share}%) carry a criticality tag (@p0, @p1, @p2, @critical).` +
+      (scopeOnly
+        ? ` ${scopeOnly} more carry only scope or execution tags (@smoke, @nightly…), which say when a test runs, not how critical its journey is.`
+        : ""),
     impact:
       "Without priorities the suite is all-or-nothing: the team cannot run a fast critical subset on every merge request and a full run nightly, and cannot say what a red pipeline actually blocks.",
     recommendation:

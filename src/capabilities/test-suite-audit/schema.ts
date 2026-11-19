@@ -48,7 +48,13 @@ export const SpecObservationSchema = z.object({
   testsWithoutAssertion: z.number().int().nonnegative(),
   usesSemanticLocators: z.boolean().describe("getByRole/getByLabel/getByTestId/cy.findByRole seen."),
   usesPageObjectOrFixture: z.boolean().describe("Imports a page object, fixture, or custom command module."),
-  priorityTags: z.array(z.string()).describe("Tags like @p0, @smoke, @critical found in titles or grep."),
+  priorityTags: z
+    .array(z.string())
+    .describe("Criticality tags of the journey (@p0, @p1, @p2, @critical) found in titles or grep. Not defect priority."),
+  scopeTags: z
+    .array(z.string())
+    .optional()
+    .describe("Scope or execution tags (@smoke, @sanity, @regression, @nightly, @slow, @wip). They do not denote criticality."),
 });
 export type SpecObservation = z.infer<typeof SpecObservationSchema>;
 
@@ -241,6 +247,7 @@ export const TestSuiteAuditJudgmentSchema = z.object({
     specsWithSemanticLocators: z.number().int().nonnegative(),
     specsWithPageObjects: z.number().int().nonnegative(),
     specsWithPriorityTags: z.number().int().nonnegative(),
+    specsWithScopeTags: z.number().int().nonnegative(),
   }),
   completeness: z.object({
     score: z.number().min(0).max(1).describe("How much of the expected input the scan actually saw (1 = everything)."),

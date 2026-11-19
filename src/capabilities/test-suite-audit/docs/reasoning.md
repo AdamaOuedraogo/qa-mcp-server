@@ -86,7 +86,7 @@ not claim a measured run time.
 | Rule | Flags | Severity logic |
 | --- | --- | --- |
 | COV-000 | no specs found | critical (nothing to audit — probably the wrong root) |
-| COV-001 | < 50 % of specs carry a priority/scope tag (`@p0`, `@smoke`, …) | high if none, else medium — the base of a risk-based strategy |
+| COV-001 | < 50 % of specs carry a criticality tag (`@p0`, `@p1`, `@p2`, `@critical`); scope/execution tags (`@smoke`, `@sanity`, `@regression`, `@nightly`, `@slow`, `@wip`) are reported in `scopeTags` and do not count | high if none, else medium — the base of a risk-based strategy |
 | COV-002 | `.skip`/`fixme`/`xit` | high ≥10, medium ≥3, else low |
 | COV-003 | `.only`/`fit`/`fdescribe` committed | **critical** — silently removes coverage on CI |
 | COV-004 | tests without a *visible* assertion (heuristic) | medium ≥10, else low |

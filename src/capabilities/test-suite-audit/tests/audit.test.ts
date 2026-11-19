@@ -955,3 +955,48 @@ test("a CI file swapped for a symlink is left out, and the E2E job's absence is 
     await cleanup(base);
   }
 });
+
+// --- Criticality tags vs scope/execution tags ---------------------------------
+
+test("analyseSpec separates criticality tags from scope tags and drops @p3", () => {
+  const s = analyseSpec(
+    "tests/mixed.spec.ts",
+    [
+      `test("@p1 @smoke checkout", async ({ page }) => { await expect(page).toHaveURL("/"); });`,
+      `test("@critical login @nightly", async ({ page }) => { await expect(page).toHaveURL("/"); });`,
+      `test("@p3 legacy @slow @wip", async ({ page }) => { await expect(page).toHaveURL("/"); });`,
+      `test("@regression @sanity @P2 search", async ({ page }) => { await expect(page).toHaveURL("/"); });`,
+    ].join("\n"),
+    5,
+  );
+  assert.deepEqual(s.priorityTags, ["@critical", "@p1", "@p2"]);
+  assert.deepEqual(s.scopeTags, ["@nightly", "@regression", "@sanity", "@slow", "@smoke", "@wip"]);
+});
+
+test("COV-001: scope or execution tags alone do not count as prioritisation by risk", async () => {
+  const { base, project } = await tempProject();
+  try {
+    const { writeFile, rm } = await import("node:fs/promises");
+    await rm(join(project, "tests", "ok.spec.ts"));
+    const body = (title: string) => `test("${title}", async ({ page }) => { await expect(page).toHaveURL("/"); });\n`;
+    await writeFile(join(project, "tests", "a.spec.ts"), body("@smoke a"));
+    await writeFile(join(project, "tests", "b.spec.ts"), body("@nightly @slow b"));
+    await writeFile(join(project, "tests", "c.spec.ts"), body("@p3 c"));
+    await writeFile(join(project, "tests", "d.spec.ts"), body("@p0 d"));
+    const j = auditTestSuite(await scanProject(project));
+    const cov = j.findings.find((f) => f.id === "COV-001");
+    assert.ok(cov, "1 of 4 carries a criticality tag: below 50%");
+    assert.equal(cov.title, "Tests are not tagged by journey criticality");
+    assert.match(cov.observation, /^1 of 4 spec files \(25%\) carry a criticality tag/);
+    assert.match(cov.observation, /2 more carry only scope or execution tags/);
+    assert.equal(j.metrics.specsWithPriorityTags, 1);
+    assert.equal(j.metrics.specsWithScopeTags, 2);
+
+    // With criticality tags on half the files, scope tags elsewhere change nothing.
+    await writeFile(join(project, "tests", "a.spec.ts"), body("@p1 @smoke a"));
+    const ok = auditTestSuite(await scanProject(project));
+    assert.equal(ok.findings.find((f) => f.id === "COV-001"), undefined);
+  } finally {
+    await cleanup(base);
+  }
+});

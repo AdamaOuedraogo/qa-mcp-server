@@ -44,6 +44,7 @@ export function auditTestSuite(rawObservation: TestSuiteObservation): TestSuiteA
     specsWithSemanticLocators: specs.filter((s) => s.usesSemanticLocators).length,
     specsWithPageObjects: specs.filter((s) => s.usesPageObjectOrFixture).length,
     specsWithPriorityTags: specs.filter((s) => s.priorityTags.length > 0).length,
+    specsWithScopeTags: specs.filter((s) => (s.scopeTags ?? []).length > 0).length,
   };
 
   const completeness = computeCompleteness(obs);
