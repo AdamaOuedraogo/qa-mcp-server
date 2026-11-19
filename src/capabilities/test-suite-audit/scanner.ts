@@ -1,6 +1,7 @@
 import { readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep, basename, extname } from "node:path";
 import { confineRoot, openConfined, ROOT_REFUSALS, type ConfinedRefusal } from "../../utils/confinedRead.js";
+import { analyseCi } from "./ci.js";
 import type {
   CiObservation,
   Framework,
@@ -307,51 +308,8 @@ export function analyseRunnerConfig(configFile: string | undefined, source: stri
   };
 }
 
-/** Strip YAML comments so a commented-out job or a `# TODO: add playwright` line is not evidence. */
-function stripYamlComments(src: string): string {
-  return src
-    .split(/\r?\n/)
-    .map((l) => l.replace(/(^|\s)#.*$/, ""))
-    .join("\n");
-}
-
-// A job that actually *runs* E2E tests, not one that merely mentions a tool
-// (an `image: mcr.microsoft.com/playwright` line, a cache key, a comment).
-const E2E_RUN_COMMAND = [
-  /\b(npx|pnpm|yarn|bunx?)\s+(dlx\s+)?playwright\s+test\b/i,
-  /\bplaywright\s+test\b/i,
-  /\b(npx|pnpm|yarn|bunx?)\s+(dlx\s+)?cypress\s+run\b/i,
-  /\bcypress\s+run\b/i,
-  /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test:)?(e2e|playwright|cypress|ui)(:[\w-]+)?\b/i,
-  /\buses:\s*cypress-io\/github-action/i,
-];
-
-/** Read the CI definition(s). Pure. */
-export function analyseCi(files: Array<{ path: string; source: string }>): CiObservation {
-  if (files.length === 0) {
-    return { provider: "none", files: [], e2eJobPresent: false };
-  }
-  const all = files.map((f) => stripYamlComments(f.source)).join("\n");
-  const gitlab = files.some((f) => basename(f.path) === ".gitlab-ci.yml");
-  const github = files.some((f) => f.path.includes(".github/workflows"));
-  const e2e = matchAny(all, E2E_RUN_COMMAND);
-  if (!e2e) {
-    // No run command: say what we did *not* observe rather than guessing at gates.
-    return { provider: gitlab ? "gitlab" : github ? "github" : "other", files: files.map((f) => f.path), e2eJobPresent: false };
-  }
-  return {
-    provider: gitlab ? "gitlab" : github ? "github" : "other",
-    files: files.map((f) => f.path),
-    e2eJobPresent: true,
-    runsOnMergeRequest: bool(/merge_request_event|merge_requests\b|pull_request\b|CI_MERGE_REQUEST_IID/i, all),
-    scheduledRun: bool(/CI_PIPELINE_SOURCE\s*==\s*["']schedule["']|^\s*schedule\s*:|^\s*-\s*cron\s*:|\bschedules\b/im, all),
-    artifactsPublished: bool(/^\s*artifacts\s*:|uses:\s*actions\/upload-artifact/im, all),
-    junitReportWired: bool(/^\s*junit\s*:|reports\s*:\s*\n?\s*junit|junit\.xml|junit-report/im, all),
-    parallelOrSharded: bool(/^\s*parallel\s*:|--shard[= ]|^\s*matrix\s*:|\$\{\{\s*matrix\./im, all),
-    blanketJobRetry: bool(/^\s*retry\s*:\s*[12]\b|^\s*retry\s*:\s*\n\s*max\s*:\s*[12]\b/m, all),
-    dependencyCache: bool(/^\s*cache\s*:|uses:\s*actions\/cache|cache:\s*['"]?(npm|pnpm|yarn)/im, all),
-  };
-}
+// CI analysis lives in ./ci.ts (job-level, no YAML parser); re-exported here.
+export { analyseCi } from "./ci.js";
 
 // --- Directory walk -----------------------------------------------------------
 

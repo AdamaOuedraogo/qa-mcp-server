@@ -74,14 +74,24 @@ export type RunnerConfigObservation = z.infer<typeof RunnerConfigObservationSche
 export const CiObservationSchema = z.object({
   provider: z.enum(["gitlab", "github", "other", "none"]),
   files: z.array(z.string()),
-  e2eJobPresent: z.boolean().describe("A job/step that runs Playwright or Cypress."),
-  runsOnMergeRequest: z.boolean().optional(),
-  scheduledRun: z.boolean().optional().describe("A nightly/scheduled pipeline exists."),
-  artifactsPublished: z.boolean().optional().describe("Reports/traces/videos kept as CI artifacts."),
-  junitReportWired: z.boolean().optional().describe("JUnit report fed to the CI's test tab."),
-  parallelOrSharded: z.boolean().optional(),
-  blanketJobRetry: z.boolean().optional().describe("CI-level retry of the whole job (masks flake)."),
-  dependencyCache: z.boolean().optional(),
+  e2eJobPresent: z.boolean().describe("An enabled job whose own script/steps run Playwright or Cypress."),
+  e2eJobs: z
+    .array(z.object({ file: z.string(), job: z.string(), manualOnly: z.boolean() }))
+    .optional()
+    .describe("The E2E jobs found. Settings below are read from these jobs only."),
+  e2eJobNotEstablished: z
+    .string()
+    .optional()
+    .describe("Why the absence of an E2E job is not established (command outside a job script, included files…)."),
+  // For the settings below, undefined means *not established*: absent from the
+  // E2E job but present elsewhere, or inherited from somewhere not read.
+  runsOnMergeRequest: z.boolean().optional().describe("The E2E job gates merge requests; manual-only or allowed-to-fail is false."),
+  scheduledRun: z.boolean().optional().describe("The E2E job runs on a schedule."),
+  artifactsPublished: z.boolean().optional().describe("The E2E job keeps reports/traces/videos as artifacts."),
+  junitReportWired: z.boolean().optional().describe("The E2E job feeds a JUnit report to the CI's test tab."),
+  parallelOrSharded: z.boolean().optional().describe("The E2E job is parallel, sharded or a matrix."),
+  blanketJobRetry: z.boolean().optional().describe("The E2E job is retried as a whole (masks flake)."),
+  dependencyCache: z.boolean().optional().describe("The E2E job caches dependencies."),
 });
 export type CiObservation = z.infer<typeof CiObservationSchema>;
 

@@ -757,3 +757,145 @@ test("SPD-001 fires on an explicit workers: 1, and on a CI ternary that resolves
   const many = await spd001For(`export default defineConfig({ workers: process.env.CI ? 4 : undefined });\n`);
   assert.equal(many.fired, false);
 });
+
+// --- CI: settings count only in the job that runs the command ------------------
+
+test("analyseCi: in a multi-job pipeline, settings of other jobs are not attributed to the E2E job", () => {
+  const ci = analyseCi([
+    {
+      path: ".gitlab-ci.yml",
+      source:
+        `build:\n  script: [npm run build]\n  retry: 2\n  parallel: 3\n  cache:\n    paths: [node_modules]\n  artifacts:\n    paths: [dist]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n` +
+        `e2e:\n  script:\n    - npx playwright test\n`,
+    },
+  ]);
+  assert.equal(ci.e2eJobPresent, true);
+  assert.deepEqual(ci.e2eJobs, [{ file: ".gitlab-ci.yml", job: "e2e", manualOnly: false }]);
+  for (const k of ["artifactsPublished", "parallelOrSharded", "blanketJobRetry", "dependencyCache"] as const) {
+    assert.equal(ci[k], undefined, `${k}: present only in another job, so not established`);
+  }
+  assert.equal(ci.runsOnMergeRequest, undefined, "the MR rule belongs to build");
+  assert.equal(ci.scheduledRun, undefined);
+});
+
+test("analyseCi: a setting absent from every job is an observed absence, not 'not established'", () => {
+  const ci = analyseCi([{ path: ".gitlab-ci.yml", source: `e2e:\n  script:\n    - npx playwright test\n` }]);
+  assert.equal(ci.artifactsPublished, false);
+  assert.equal(ci.parallelOrSharded, false);
+  assert.equal(ci.dependencyCache, false);
+  assert.equal(ci.blanketJobRetry, false);
+});
+
+test("analyseCi: a command in variables or a template is not an E2E job, and the absence is not established", () => {
+  const variablesOnly = analyseCi([
+    { path: ".gitlab-ci.yml", source: `variables:\n  E2E_CMD: "npx playwright test"\nlint:\n  script: [npm run lint]\n` },
+  ]);
+  assert.equal(variablesOnly.e2eJobPresent, false);
+  assert.match(variablesOnly.e2eJobNotEstablished ?? "", /outside any enabled job's own script/);
+
+  const template = analyseCi([
+    { path: ".gitlab-ci.yml", source: `.e2e-base:\n  script:\n    - npx playwright test\ne2e:\n  extends: .e2e-base\n  artifacts:\n    paths: [report]\n` },
+  ]);
+  assert.equal(template.e2eJobPresent, false, "the command sits in the template, not in the job");
+  assert.ok(template.e2eJobNotEstablished);
+
+  const ghEnv = analyseCi([
+    { path: ".github/workflows/ci.yml", source: `on: [pull_request]\njobs:\n  unit:\n    env:\n      CMD: npx playwright test\n    steps:\n      - run: npm test\n` },
+  ]);
+  assert.equal(ghEnv.e2eJobPresent, false);
+  assert.ok(ghEnv.e2eJobNotEstablished);
+});
+
+test("analyseCi: manual-only, allowed-to-fail and disabled jobs are not merge-request gates", () => {
+  const manual = analyseCi([{ path: ".gitlab-ci.yml", source: `e2e:\n  when: manual\n  script: [npx playwright test]\n` }]);
+  assert.equal(manual.e2eJobPresent, true);
+  assert.equal(manual.e2eJobs?.[0]?.manualOnly, true);
+  assert.equal(manual.runsOnMergeRequest, false);
+
+  const manualRule = analyseCi([
+    { path: ".gitlab-ci.yml", source: `e2e:\n  script: [npx playwright test]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n      when: manual\n` },
+  ]);
+  assert.equal(manualRule.runsOnMergeRequest, false);
+
+  const allowed = analyseCi([
+    { path: ".gitlab-ci.yml", source: `e2e:\n  allow_failure: true\n  script: [npx playwright test]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n` },
+  ]);
+  assert.equal(allowed.runsOnMergeRequest, false);
+
+  const never = analyseCi([{ path: ".gitlab-ci.yml", source: `e2e:\n  when: never\n  script: [npx playwright test]\n` }]);
+  assert.equal(never.e2eJobPresent, false, "a disabled job runs nothing");
+
+  const ghDispatch = analyseCi([
+    { path: ".github/workflows/e2e.yml", source: `on:\n  workflow_dispatch:\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n` },
+  ]);
+  assert.equal(ghDispatch.e2eJobs?.[0]?.manualOnly, true);
+  assert.equal(ghDispatch.runsOnMergeRequest, false);
+
+  const ghDisabled = analyseCi([
+    { path: ".github/workflows/e2e.yml", source: `on: [pull_request]\njobs:\n  e2e:\n    if: false\n    steps:\n      - run: npx playwright test\n` },
+  ]);
+  assert.equal(ghDisabled.e2eJobPresent, false);
+});
+
+test("analyseCi: GitLab default: settings and GitHub workflow triggers", () => {
+  const withDefault = analyseCi([
+    { path: ".gitlab-ci.yml", source: `default:\n  retry: 2\n  cache:\n    paths: [.pnpm-store]\ne2e:\n  script: [npx playwright test]\n` },
+  ]);
+  assert.equal(withDefault.blanketJobRetry, undefined, "set in default:, not in the job");
+  assert.equal(withDefault.dependencyCache, undefined);
+
+  const gh = analyseCi([
+    {
+      path: ".github/workflows/e2e.yml",
+      source: `on:\n  push:\n    branches: [main]\njobs:\n  e2e:\n    steps:\n      - uses: actions/cache@v4\n      - run: |\n          npx playwright test\n`,
+    },
+  ]);
+  assert.equal(gh.e2eJobPresent, true);
+  assert.equal(gh.dependencyCache, true);
+  assert.equal(gh.scheduledRun, false, "the workflow that runs the job has no schedule trigger");
+  assert.equal(gh.runsOnMergeRequest, undefined, "push-only: not established as an MR gate");
+});
+
+test("CI rules report a not-established setting as not observed, never as observed", () => {
+  const obs: TestSuiteObservation = {
+    framework: "playwright",
+    specs: [],
+    totalSpecFilesFound: 25,
+    runnerConfig: { reporters: ["json"], baseUrlConfigured: true, storageStateOrSession: true, configFile: "playwright.config.ts" },
+    ci: {
+      provider: "gitlab",
+      files: [".gitlab-ci.yml"],
+      e2eJobPresent: true,
+      e2eJobs: [{ file: ".gitlab-ci.yml", job: "e2e", manualOnly: false }],
+    },
+    repo: {
+      typescript: true,
+      lintConfigured: true,
+      formatterConfigured: true,
+      lockfile: true,
+      e2eScript: true,
+      testingReadme: true,
+      pageObjectsDir: true,
+      fixturesOrSeedDir: true,
+      packageJsonFound: true,
+    },
+    scanNotes: [],
+  };
+  const byId = (o: TestSuiteObservation) => new Map(auditTestSuite(o).findings.map((f) => [f.id, f]));
+  const undetermined = byId(obs);
+  for (const id of ["SPD-002", "SPD-003", "OBS-003", "COV-006"]) {
+    assert.equal(undetermined.get(id)?.basis, "not_observed", id);
+  }
+  const absent = byId({ ...obs, ci: { ...obs.ci, parallelOrSharded: false, dependencyCache: false, artifactsPublished: false, scheduledRun: false } });
+  for (const id of ["SPD-002", "SPD-003", "OBS-003", "COV-006"]) {
+    assert.equal(absent.get(id)?.basis, "observed", id);
+  }
+  assert.deepEqual(absent.get("OBS-003")?.evidence, [{ file: ".gitlab-ci.yml", snippet: "job e2e" }]);
+
+  const notEstablished = byId({
+    ...obs,
+    ci: { provider: "gitlab", files: [".gitlab-ci.yml"], e2eJobPresent: false, e2eJobNotEstablished: "a command sits in variables" },
+  });
+  assert.equal(notEstablished.get("COV-005")?.basis, "not_observed");
+  assert.match(notEstablished.get("COV-005")!.title, /could be confirmed/);
+});

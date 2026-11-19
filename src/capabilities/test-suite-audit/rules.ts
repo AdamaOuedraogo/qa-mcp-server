@@ -327,6 +327,23 @@ const noLint: Rule = (obs) => {
   };
 };
 
+// --- CI helpers ----------------------------------------------------------------
+
+/** Evidence for a CI finding: the E2E job(s) when known, else every CI file. */
+function ciEvidence(obs: TestSuiteObservation): Array<{ file: string; snippet?: string }> {
+  const jobs = obs.ci.e2eJobs;
+  if (jobs?.length) return jobs.map((j) => ({ file: j.file, snippet: `job ${j.job}${j.manualOnly ? " (manual only)" : ""}` }));
+  return obs.ci.files.map((f) => ({ file: f }));
+}
+
+/** An E2E-job setting: false is an observed absence, undefined was not established. */
+function ciBasis(value: boolean | undefined): "observed" | "not_observed" {
+  return value === false ? "observed" : "not_observed";
+}
+
+const NOT_ESTABLISHED =
+  "Not established from the E2E job itself: the setting appears elsewhere in the CI files, or the job inherits from a template, an include or a reusable workflow that was not read.";
+
 // --- Feedback speed ----------------------------------------------------------
 
 // Playwright runs spec *files* in parallel by default (workers default to half
@@ -359,36 +376,41 @@ const noParallelism: Rule = (obs) => {
 const ciNotSharded: Rule = (obs) => {
   if (!obs.ci.e2eJobPresent || obs.ci.parallelOrSharded) return undefined;
   if (obs.totalSpecFilesFound < 20) return undefined;
+  const basis = ciBasis(obs.ci.parallelOrSharded);
   return {
     id: "SPD-002",
     axis: "feedback_speed",
     severity: "medium",
-    title: "E2E job is not sharded in CI",
-    observation: `${obs.totalSpecFilesFound} spec files run in a single CI job (no parallel/matrix/--shard).`,
+    title: basis === "observed" ? "E2E job is not sharded in CI" : "E2E job sharding not established",
+    observation:
+      basis === "observed"
+        ? `${obs.totalSpecFilesFound} spec files run in a single CI job (no parallel/matrix/--shard in that job).`
+        : `${obs.totalSpecFilesFound} spec files. ${NOT_ESTABLISHED}`,
     impact: "A single long job is the pipeline's critical path; it delays every merge and encourages blanket retries.",
     recommendation: "Shard the E2E job (GitLab `parallel:` + `--shard`, or a GitHub matrix) and merge reports afterwards.",
     effort: "S",
     quickWin: true,
-    basis: "observed",
-    evidence: obs.ci.files.map((f) => ({ file: f })),
+    basis: basis,
+    evidence: ciEvidence(obs),
     occurrences: 1,
   };
 };
 
 const noCiCache: Rule = (obs) => {
   if (!obs.ci.e2eJobPresent || obs.ci.dependencyCache) return undefined;
+  const basis = ciBasis(obs.ci.dependencyCache);
   return {
     id: "SPD-003",
     axis: "feedback_speed",
     severity: "low",
-    title: "No dependency/browser cache in CI",
-    observation: "The CI definition installs dependencies without a cache directive.",
+    title: basis === "observed" ? "No dependency/browser cache in CI" : "E2E job dependency cache not established",
+    observation: basis === "observed" ? "The E2E job installs dependencies without a cache directive." : NOT_ESTABLISHED,
     impact: "Minutes of install time are paid on every pipeline before a single test runs.",
     recommendation: "Cache the package-manager store and the browser binaries (or use the official Playwright/Cypress image).",
     effort: "S",
     quickWin: true,
-    basis: "observed",
-    evidence: obs.ci.files.map((f) => ({ file: f })),
+    basis: basis,
+    evidence: ciEvidence(obs),
     occurrences: 1,
   };
 };
@@ -497,6 +519,22 @@ const noCiGate: Rule = (obs) => {
       occurrences: 1,
     };
   }
+  if (!obs.ci.e2eJobPresent && obs.ci.e2eJobNotEstablished) {
+    return {
+      id: "COV-005",
+      axis: "coverage_and_risk",
+      severity: "high",
+      title: "No CI job could be confirmed to run the E2E suite",
+      observation: `CI files found (${obs.ci.files.join(", ")}), but no enabled job runs a Playwright/Cypress command in its own script: ${obs.ci.e2eJobNotEstablished}.`,
+      impact: "If no job really runs the suite, it does not protect releases. The static scan cannot tell.",
+      recommendation: "Confirm with the team which job runs the E2E suite and on which triggers; point the audit at the files that define it.",
+      effort: "S",
+      quickWin: false,
+      basis: "not_observed",
+      evidence: obs.ci.files.map((f) => ({ file: f })),
+      occurrences: 1,
+    };
+  }
   if (!obs.ci.e2eJobPresent) {
     return {
       id: "COV-005",
@@ -514,18 +552,22 @@ const noCiGate: Rule = (obs) => {
     };
   }
   if (!obs.ci.scheduledRun) {
+    const basis = ciBasis(obs.ci.scheduledRun);
     return {
       id: "COV-006",
       axis: "coverage_and_risk",
       severity: "low",
-      title: "No scheduled (nightly) full run",
-      observation: "The CI definition has no schedule/nightly trigger.",
+      title: basis === "observed" ? "No scheduled (nightly) full run" : "Scheduled full run not established",
+      observation:
+        basis === "observed"
+          ? "The workflow that runs the E2E job has no schedule trigger."
+          : "The E2E job has no rule that names a scheduled pipeline. GitLab schedules are configured outside the YAML, so whether one exists is not established.",
       impact: "Environment drift and slow flake go unnoticed between merges; the full suite is only run under release pressure.",
       recommendation: "Schedule a nightly full run against staging and review its trend weekly.",
       effort: "S",
       quickWin: true,
-      basis: "observed",
-      evidence: obs.ci.files.map((f) => ({ file: f })),
+      basis,
+      evidence: ciEvidence(obs),
       occurrences: 1,
     };
   }
@@ -585,18 +627,20 @@ const noFailureArtifacts: Rule = (obs) => {
 
 const artifactsNotPublished: Rule = (obs) => {
   if (!obs.ci.e2eJobPresent || obs.ci.artifactsPublished) return undefined;
+  const basis = ciBasis(obs.ci.artifactsPublished);
   return {
     id: "OBS-003",
     axis: "observability",
     severity: "medium",
-    title: "CI does not publish test artifacts",
-    observation: "The E2E job has no artifacts/upload directive for reports, traces or screenshots.",
+    title: basis === "observed" ? "CI does not publish test artifacts" : "E2E job artifacts not established",
+    observation:
+      basis === "observed" ? "The E2E job has no artifacts/upload directive for reports, traces or screenshots." : NOT_ESTABLISHED,
     impact: "Evidence is produced on the runner and thrown away; investigating a red pipeline means re-running it.",
     recommendation: "Publish the report folder and traces as job artifacts (with `when: always`) and wire the JUnit file to the test tab.",
     effort: "S",
     quickWin: true,
-    basis: "observed",
-    evidence: obs.ci.files.map((f) => ({ file: f })),
+    basis: basis,
+    evidence: ciEvidence(obs),
     occurrences: 1,
   };
 };

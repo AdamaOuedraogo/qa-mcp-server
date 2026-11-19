@@ -69,8 +69,8 @@ affected, so a 3-file demo and a 300-file suite are judged the same way.
 | Rule | Flags | Severity logic |
 | --- | --- | --- |
 | SPD-001 | Playwright, ≥10 specs, config sets a single worker (`workers: 1`, or `workers: process.env.CI ? 1 : …`) | medium |
-| SPD-002 | E2E job in CI, ≥20 specs, no `parallel:`/matrix/`--shard` | medium |
-| SPD-003 | E2E job without a dependency/browser cache | low |
+| SPD-002 | E2E job in CI, ≥20 specs, no `parallel:`/matrix/`--shard` in that job | medium (`not_observed` when not established) |
+| SPD-003 | E2E job without a dependency/browser cache in that job | low (`not_observed` when not established) |
 
 Cypress parallelism is a CI/cloud concern, so SPD-001 is Playwright-only.
 Playwright runs spec files in parallel by default, and `fullyParallel` only
@@ -87,8 +87,8 @@ not claim a measured run time.
 | COV-002 | `.skip`/`fixme`/`xit` | high ≥10, medium ≥3, else low |
 | COV-003 | `.only`/`fit`/`fdescribe` committed | **critical** — silently removes coverage on CI |
 | COV-004 | tests without a *visible* assertion (heuristic) | medium ≥10, else low |
-| COV-005 | no CI definition at the root (`not_observed`), or CI without a job that *runs* an E2E command | high / high |
-| COV-006 | no scheduled (nightly) run | low |
+| COV-005 | no CI definition at the root (`not_observed`); CI where the command appears only outside an enabled job's script, or jobs come from files not read (`not_observed`); or CI with no job that *runs* an E2E command | high / high / high |
+| COV-006 | the E2E job has no scheduled run | low (`not_observed` when not established, e.g. GitLab schedules set in the UI) |
 
 ### Observability — "can anyone investigate without re-running?"
 
@@ -97,7 +97,7 @@ not claim a measured run time.
 | CFG-001 | specs found but no runner config at the root (`not_observed`) | medium — and OBS-001/002, REL-004, SPD-001 stay silent |
 | OBS-001 | no JSON/JUnit/Allure/Mochawesome reporter | high — without it there is no trend and nothing for AI-assisted triage |
 | OBS-002 | trace/screenshot off (or nothing configured on Playwright) | medium |
-| OBS-003 | E2E job publishes no artifacts | medium |
+| OBS-003 | E2E job publishes no artifacts | medium (`not_observed` when not established) |
 
 ### Governance — "would this survive the consultant leaving?"
 
@@ -110,12 +110,27 @@ not claim a measured run time.
 
 ## CI detection
 
-A CI file counts as running the suite only if, after stripping YAML comments,
-it contains a run command (`playwright test`, `cypress run`, a `test:e2e`-style
-script, the Cypress GitHub action). An `image:` line, a cache key or a comment
-is not evidence. Gate, schedule, artifact and sharding signals are inferred
-only once a run command was found; otherwise they are left `undefined`
-(not observed).
+CI files are split into jobs by indentation (`ci.ts`; no YAML parser). A job
+runs the suite only if its *own* `script:`/`before_script:` (GitLab) or a
+`run:` step / the Cypress GitHub action (GitHub) holds a run command
+(`playwright test`, `cypress run`, a `test:e2e`-style script), after YAML
+comments are stripped. The same text in `variables:`, `env:`, a template or an
+`image:` line is not an E2E job; when that is the only place it appears, or
+jobs come from `include:`/a reusable workflow, the absence of an E2E job is
+*not established* (`e2eJobNotEstablished`) rather than observed.
+
+A setting counts for the E2E job only when it sits in that job. Absent from
+the job but present elsewhere (another job, GitLab `default:`, a template), or
+inherited through `extends:`/`<<:`/`!reference`/a local action, it is *not
+established* (`undefined`) and the rule reports `not_observed`. It is `false`,
+an observed absence, only when it appears nowhere in the file.
+
+Gates: a disabled job (`when: never`, `if: false`, a hidden `.template`) is
+not an E2E job. A manual-only job (`when: manual`, a GitHub workflow with only
+`workflow_dispatch`) or one allowed to fail (`allow_failure`,
+`continue-on-error`) is not a merge-request gate (`runsOnMergeRequest:
+false`). A GitLab job without a merge-request rule, or a GitHub job with its
+own `if:`, leaves the gate not established.
 
 ## Scoring
 

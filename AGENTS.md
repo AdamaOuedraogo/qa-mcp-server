@@ -81,6 +81,7 @@ src/capabilities/test-suite-audit/
   schema.ts               observation (files/config/CI facts) in, audit judgment out
   scanner.ts              bounded, read-only project walk; facts only, no judgment
   rules.ts                the expertise: ~30 finding rules, axis scoring, hotspots, plan
+  ci.ts                   analyseCi(): CI files split into jobs, settings per E2E job
   evaluator.ts            pure orchestration: auditTestSuite()
   tool.ts                 audit_test_suite; refuses without QA_MCP_PROJECT_DIR, reads via openConfined()
   fixtures/sample-project a deliberately smelly Playwright project (excluded from tsc)
@@ -214,8 +215,12 @@ documentation updates.
 - Findings carry `basis: observed | not_observed`. Rules that depend on a file
   that was not found must not fire; report the gap (`CFG-001`, `COV-005`) with
   `not_observed` instead. Keep `completeness` honest.
-- `analyseCi()` requires a real run command after stripping YAML comments;
-  mentions, image names and comments are not evidence of an E2E job.
+- `analyseCi()` (`ci.ts`) requires a real run command in an enabled job's own
+  script after stripping YAML comments; mentions, variables, templates, image
+  names and comments are not evidence of an E2E job. A setting counts only
+  when it sits in that job; otherwise it is not established (`undefined`),
+  and rules report it `not_observed`, never observed. Manual-only or
+  allowed-to-fail jobs are not merge-request gates.
 - `rules.ts` implements `docs/reasoning.md`. Change them together, with tests.
 - A static audit never awards level 4 on an axis that has findings or lacks
   positive signals. `caveats` must keep stating what static analysis cannot see.
