@@ -123,8 +123,18 @@ On GitHub, artifacts, JUnit reporting, retries and caching are read only from
 step `uses`/`with` keys; a step that uses an action outside a known list was
 not read, so those settings are undefined, never false. GitHub has no
 built-in test report, so JUnit wiring is either a known reporter action
-(true) or not established. Run commands are `playwright test`, `cypress run`
-or a `test:e2e`-style script, matched after YAML comments are stripped. The same text in `variables:`, `env:`, a template or an
+(true) or not established.
+
+Run commands are matched in command position only: at the start of a logical
+command (a line, or after `&&`, `||`, `;`; backslash continuations joined;
+`VAR=value` prefixes skipped), after YAML comments are stripped (a `#` inside
+quotes is not a comment). `playwright test` and `cypress run`, directly or via
+`npx`/`pnpm exec`/`yarn`/`bunx`/a `node_modules/.bin` path, are *observed*;
+`--list`, `--help` and `--version` run nothing. `install`, `open`, `echo …`
+and bare `playwright`/`cypress`/`ui` script names are not runs. A package
+script recognised by its name only (`e2e`, `test:e2e`, `e2e:*`) is an
+*inferred* E2E job: its body was not read, and a finding that rests on it
+carries `basis: inferred` (weighed like `not_observed`). The same text in `variables:`, `env:`, a template or an
 `image:` line is not an E2E job; when that is the only place it appears, or
 jobs come from `include:`/a reusable workflow, the absence of an E2E job is
 *not established* (`e2eJobNotEstablished`) rather than observed.

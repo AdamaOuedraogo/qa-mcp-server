@@ -86,7 +86,17 @@ export const CiObservationSchema = z.object({
   files: z.array(z.string()),
   e2eJobPresent: z.boolean().describe("An enabled job whose own script/steps run Playwright or Cypress."),
   e2eJobs: z
-    .array(z.object({ file: z.string(), job: z.string(), manualOnly: z.boolean() }))
+    .array(
+      z.object({
+        file: z.string(),
+        job: z.string(),
+        manualOnly: z.boolean(),
+        basis: z
+          .enum(["observed", "inferred"])
+          .optional()
+          .describe("observed: the job runs playwright test / cypress run itself. inferred: it runs a package script named e2e/test:e2e whose body was not read."),
+      }),
+    )
     .optional()
     .describe("The E2E jobs found. Settings below are read from these jobs only."),
   e2eJobNotEstablished: z
@@ -199,10 +209,11 @@ export const FindingSchema = z.object({
   effort: EffortSchema,
   quickWin: z.boolean().describe("Fixable inside a 2-day audit, typically in one pull request."),
   basis: z
-    .enum(["observed", "not_observed"])
+    .enum(["observed", "not_observed", "inferred"])
     .describe(
       "observed: the smell was seen in the files. not_observed: something expected was not found at the " +
-        "audited root (config, CI, lockfile…) — it may live elsewhere; verify before reporting as absent.",
+        "audited root (config, CI, lockfile…) — it may live elsewhere; verify before reporting as absent. " +
+        "inferred: rests on a name, not on read content (an E2E job found through a package script named e2e).",
     ),
   evidence: z.array(EvidenceRefSchema).describe("file:line proof, capped."),
   occurrences: z.number().int().nonnegative().describe("Total occurrences across the suite."),

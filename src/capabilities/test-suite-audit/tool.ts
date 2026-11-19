@@ -175,7 +175,11 @@ export function render(
     lines.push(`### ${SEVERITY_ICON[f.severity]} ${f.id} · ${f.title}${f.quickWin ? " ⚡" : ""}`);
     lines.push(
       `- **Axis:** ${f.axis.replace(/_/g, " ")} · **Severity:** ${f.severity} · **Effort:** ${f.effort}` +
-        (f.basis === "not_observed" ? " · **Basis:** not observed at the audited root — verify before reporting as absent" : ""),
+        (f.basis === "not_observed"
+          ? " · **Basis:** not observed at the audited root — verify before reporting as absent"
+          : f.basis === "inferred"
+            ? " · **Basis:** inferred from a package script name (e2e / test:e2e) whose body was not read — verify the script"
+            : ""),
     );
     lines.push(`- **Observed:** ${f.observation}`);
     lines.push(`- **Impact:** ${f.impact}`);

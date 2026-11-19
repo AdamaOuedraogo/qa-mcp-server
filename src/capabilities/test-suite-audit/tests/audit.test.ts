@@ -770,7 +770,7 @@ test("analyseCi: in a multi-job pipeline, settings of other jobs are not attribu
     },
   ]);
   assert.equal(ci.e2eJobPresent, true);
-  assert.deepEqual(ci.e2eJobs, [{ file: ".gitlab-ci.yml", job: "e2e", manualOnly: false }]);
+  assert.deepEqual(ci.e2eJobs, [{ file: ".gitlab-ci.yml", job: "e2e", manualOnly: false, basis: "observed" }]);
   for (const k of ["artifactsPublished", "parallelOrSharded", "blanketJobRetry", "dependencyCache"] as const) {
     assert.equal(ci[k], undefined, `${k}: present only in another job, so not established`);
   }

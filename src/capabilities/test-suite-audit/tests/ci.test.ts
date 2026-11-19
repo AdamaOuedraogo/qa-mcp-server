@@ -260,3 +260,90 @@ test("GitHub supported: run (scalar, literal and folded blocks), the Cypress act
   assert.equal(cy.ci.e2eJobPresent, true);
   assertTrueValuesHaveEvidence(cy);
 });
+
+// --- Command recognition: adversarial -----------------------------------------
+
+test("commands: install, open, echo and --list are not test runs", () => {
+  for (const cmd of [
+    "pnpm playwright install --with-deps",
+    "npx playwright install chromium",
+    "pnpm cypress open",
+    "npx cypress verify",
+    'echo "remember to run playwright test"',
+    "npx playwright test --list",
+    "npx playwright test --help",
+    "npx cypress run --version",
+    "pnpm ui",
+    "npm run playwright",
+  ]) {
+    const o = gitlab(`job:\n  script:\n    - ${cmd}\n`);
+    assert.equal(o.ci.e2eJobPresent, false, cmd);
+    assertTrueValuesHaveEvidence(o);
+  }
+});
+
+test("comments: a # inside quotes is not a comment; a commented-out command is not a command", () => {
+  const quoted = gitlab(`e2e:\n  script:\n    - echo "step #1" && npx playwright test\n`);
+  assert.equal(quoted.ci.e2eJobPresent, true);
+  assertTrueValuesHaveEvidence(quoted);
+
+  const commented = gitlab(`e2e:\n  script:\n    - npm ci # && npx playwright test\n`);
+  assert.equal(commented.ci.e2eJobPresent, false);
+
+  const apostrophe = gitlab(`e2e:\n  script:\n    - echo don't # npx playwright test\n`);
+  assert.equal(apostrophe.ci.e2eJobPresent, false, "an apostrophe in a word does not open a quote");
+});
+
+// --- Command recognition: supported ------------------------------------------
+
+test("commands supported: direct runs in command position, continuations, chained commands, env prefixes", () => {
+  for (const cmd of [
+    "npx playwright test",
+    "pnpm exec playwright test --shard=1/4",
+    "yarn playwright test",
+    "bunx playwright test",
+    "./node_modules/.bin/playwright test",
+    "CI=1 HOME=/tmp npx playwright test",
+    "npm ci && npx playwright test",
+    "npx cypress run --browser chrome",
+  ]) {
+    const o = gitlab(`e2e:\n  script:\n    - ${cmd}\n`);
+    assert.equal(o.ci.e2eJobPresent, true, cmd);
+    assert.equal(o.ci.e2eJobs?.[0]?.basis, "observed", cmd);
+    assertTrueValuesHaveEvidence(o);
+  }
+  const cont = gitlab(`e2e:\n  script:\n    - npx playwright \\\n      test --project=chromium\n`);
+  assert.equal(cont.ci.e2eJobPresent, true, "a backslash continuation is joined");
+});
+
+test("commands supported: a package script named e2e is an inferred E2E job, and findings on it carry basis inferred", async () => {
+  for (const cmd of ["pnpm test:e2e", "npm run e2e", "yarn e2e:ci", "pnpm run test:e2e:headless", "bun run e2e"]) {
+    const o = gitlab(`e2e:\n  script:\n    - ${cmd}\n`);
+    assert.equal(o.ci.e2eJobPresent, true, cmd);
+    assert.equal(o.ci.e2eJobs?.[0]?.basis, "inferred", cmd);
+  }
+  const { auditTestSuite } = await import("../evaluator.js");
+  const o = gitlab(`e2e:\n  script:\n    - pnpm test:e2e\n`);
+  const j = auditTestSuite({
+    framework: "playwright",
+    specs: [],
+    totalSpecFilesFound: 25,
+    runnerConfig: { reporters: ["json"], baseUrlConfigured: true, storageStateOrSession: true, configFile: "playwright.config.ts" },
+    ci: o.ci,
+    repo: {
+      typescript: true,
+      lintConfigured: true,
+      formatterConfigured: true,
+      lockfile: true,
+      e2eScript: true,
+      testingReadme: true,
+      pageObjectsDir: true,
+      fixturesOrSeedDir: true,
+      packageJsonFound: true,
+    },
+    scanNotes: [],
+  });
+  const obs003 = j.findings.find((f) => f.id === "OBS-003");
+  assert.equal(o.ci.artifactsPublished, false);
+  assert.equal(obs003?.basis, "inferred", "the job itself was only inferred from a script name");
+});

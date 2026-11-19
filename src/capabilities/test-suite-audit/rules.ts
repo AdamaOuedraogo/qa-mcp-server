@@ -336,9 +336,15 @@ function ciEvidence(obs: TestSuiteObservation): Array<{ file: string; snippet?: 
   return obs.ci.files.map((f) => ({ file: f }));
 }
 
-/** An E2E-job setting: false is an observed absence, undefined was not established. */
-function ciBasis(value: boolean | undefined): "observed" | "not_observed" {
-  return value === false ? "observed" : "not_observed";
+/**
+ * An E2E-job setting: false is an observed absence, undefined was not
+ * established. When every E2E job was found only through a package script
+ * name (its body unread), an absence is inferred, not observed.
+ */
+function ciBasis(value: boolean | undefined, obs?: TestSuiteObservation): "observed" | "not_observed" | "inferred" {
+  if (value !== false) return "not_observed";
+  const jobs = obs?.ci.e2eJobs ?? [];
+  return jobs.length > 0 && jobs.every((j) => j.basis === "inferred") ? "inferred" : "observed";
 }
 
 const NOT_ESTABLISHED =
@@ -376,14 +382,14 @@ const noParallelism: Rule = (obs) => {
 const ciNotSharded: Rule = (obs) => {
   if (!obs.ci.e2eJobPresent || obs.ci.parallelOrSharded) return undefined;
   if (obs.totalSpecFilesFound < 20) return undefined;
-  const basis = ciBasis(obs.ci.parallelOrSharded);
+  const basis = ciBasis(obs.ci.parallelOrSharded, obs);
   return {
     id: "SPD-002",
     axis: "feedback_speed",
     severity: "medium",
-    title: basis === "observed" ? "E2E job is not sharded in CI" : "E2E job sharding not established",
+    title: basis !== "not_observed" ? "E2E job is not sharded in CI" : "E2E job sharding not established",
     observation:
-      basis === "observed"
+      basis !== "not_observed"
         ? `${obs.totalSpecFilesFound} spec files run in a single CI job (no parallel/matrix/--shard in that job).`
         : `${obs.totalSpecFilesFound} spec files. ${NOT_ESTABLISHED}`,
     impact: "A single long job is the pipeline's critical path; it delays every merge and encourages blanket retries.",
@@ -398,13 +404,13 @@ const ciNotSharded: Rule = (obs) => {
 
 const noCiCache: Rule = (obs) => {
   if (!obs.ci.e2eJobPresent || obs.ci.dependencyCache) return undefined;
-  const basis = ciBasis(obs.ci.dependencyCache);
+  const basis = ciBasis(obs.ci.dependencyCache, obs);
   return {
     id: "SPD-003",
     axis: "feedback_speed",
     severity: "low",
-    title: basis === "observed" ? "No dependency/browser cache in CI" : "E2E job dependency cache not established",
-    observation: basis === "observed" ? "The E2E job installs dependencies without a cache directive." : NOT_ESTABLISHED,
+    title: basis !== "not_observed" ? "No dependency/browser cache in CI" : "E2E job dependency cache not established",
+    observation: basis !== "not_observed" ? "The E2E job installs dependencies without a cache directive." : NOT_ESTABLISHED,
     impact: "Minutes of install time are paid on every pipeline before a single test runs.",
     recommendation: "Cache the package-manager store and the browser binaries (or use the official Playwright/Cypress image).",
     effort: "S",
@@ -558,14 +564,14 @@ const noCiGate: Rule = (obs) => {
     };
   }
   if (!obs.ci.scheduledRun) {
-    const basis = ciBasis(obs.ci.scheduledRun);
+    const basis = ciBasis(obs.ci.scheduledRun, obs);
     return {
       id: "COV-006",
       axis: "coverage_and_risk",
       severity: "low",
-      title: basis === "observed" ? "No scheduled (nightly) full run" : "Scheduled full run not established",
+      title: basis !== "not_observed" ? "No scheduled (nightly) full run" : "Scheduled full run not established",
       observation:
-        basis === "observed"
+        basis !== "not_observed"
           ? "The workflow that runs the E2E job has no schedule trigger."
           : `Whether the E2E job runs on a schedule is not established${obs.ci.reasons?.scheduledRun ? `: ${obs.ci.reasons.scheduledRun}` : ""}.`,
       impact: "Environment drift and slow flake go unnoticed between merges; the full suite is only run under release pressure.",
@@ -633,14 +639,14 @@ const noFailureArtifacts: Rule = (obs) => {
 
 const artifactsNotPublished: Rule = (obs) => {
   if (!obs.ci.e2eJobPresent || obs.ci.artifactsPublished) return undefined;
-  const basis = ciBasis(obs.ci.artifactsPublished);
+  const basis = ciBasis(obs.ci.artifactsPublished, obs);
   return {
     id: "OBS-003",
     axis: "observability",
     severity: "medium",
-    title: basis === "observed" ? "CI does not publish test artifacts" : "E2E job artifacts not established",
+    title: basis !== "not_observed" ? "CI does not publish test artifacts" : "E2E job artifacts not established",
     observation:
-      basis === "observed" ? "The E2E job has no artifacts/upload directive for reports, traces or screenshots." : NOT_ESTABLISHED,
+      basis !== "not_observed" ? "The E2E job has no artifacts/upload directive for reports, traces or screenshots." : NOT_ESTABLISHED,
     impact: "Evidence is produced on the runner and thrown away; investigating a red pipeline means re-running it.",
     recommendation: "Publish the report folder and traces as job artifacts (with `when: always`) and wire the JUnit file to the test tab.",
     effort: "S",

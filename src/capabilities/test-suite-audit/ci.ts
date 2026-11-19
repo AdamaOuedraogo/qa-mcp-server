@@ -24,17 +24,50 @@ import type { CiObservation } from "./schema.js";
  * report it as not observed rather than as observed.
  */
 
-const E2E_RUN_COMMAND = [
-  /\b(npx|pnpm|yarn|bunx?)\s+(dlx\s+)?playwright\s+test\b/i,
-  /\bplaywright\s+test\b/i,
-  /\b(npx|pnpm|yarn|bunx?)\s+(dlx\s+)?cypress\s+run\b/i,
-  /\bcypress\s+run\b/i,
-  /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test:)?(e2e|playwright|cypress|ui)(:[\w-]+)?\b/i,
-  /\buses:\s*cypress-io\/github-action/i,
-];
+/**
+ * Run commands, matched in command position only: the start of a logical
+ * command (a line, or after `&&`, `||`, `;`), past `VAR=value` assignments.
+ * `--list`, `--help` and `--version` run no tests.
+ */
+const DIRECT_RUN =
+  /^(?:(?:npx|bunx|pnpm\s+(?:exec|dlx)|pnpm|yarn\s+dlx|yarn|bun\s+x)\s+)?(?:\S*\/)?(?:playwright\s+test|cypress\s+run)(?=\s|$)(.*)$/i;
+/** A package script recognised by its name only: the script body is not read, so the match is inferred. */
+const SCRIPT_RUN = /^(?:npm\s+run(?:-script)?|pnpm(?:\s+run)?|yarn(?:\s+run)?|bun\s+run)\s+((?:test:)?e2e(?::[\w-]+)?)(?=\s|$)/i;
+const NOT_A_RUN = /(?:^|\s)(?:--list|--help|-h|--version|-V)(?=\s|$|=)/;
+/** Loose mention, used only to explain an abstention, never to claim a job. */
+const MENTION = /\b(?:playwright\s+test|cypress\s+run|test:e2e)\b/i;
 
-/** A line that holds one of the run commands above. */
-const E2E_LINE: Matcher = { test: (l: string) => E2E_RUN_COMMAND.some((re) => re.test(l)) };
+export type CommandBasis = "observed" | "inferred";
+
+/** Split shell text into logical commands: backslash continuations joined, then lines and &&, ||, ; */
+function logicalCommands(text: string): string[] {
+  return text
+    .replace(/\\\r?\n\s*/g, " ")
+    .split(/\r?\n|&&|\|\||;/)
+    .map((c) => c.trim().replace(/^-\s+/, "").replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "").trim())
+    .filter(Boolean);
+}
+
+/** The strongest run command in a script or run block: observed (direct), inferred (script name) or none. */
+export function commandBasis(text: string): CommandBasis | undefined {
+  let best: CommandBasis | undefined;
+  for (const c of logicalCommands(text)) {
+    const d = DIRECT_RUN.exec(c);
+    if (d && !NOT_A_RUN.test(d[1] ?? "")) return "observed";
+    if (SCRIPT_RUN.test(c)) best = "inferred";
+  }
+  return best;
+}
+
+/** A line that holds a run command. */
+const E2E_LINE: Matcher = {
+  test: (l: string) => {
+    const v = stripYamlComments(l).replace(/^\s*(?:-\s+)?(?:[\w-]+\s*:\s*)?/, "");
+    const inl = readInline(v);
+    const parts = inl.kind === "seq" ? inl.items : inl.kind === "scalar" ? [inl.value] : [v];
+    return parts.some((x) => commandBasis(x) !== undefined);
+  },
+};
 
 const GITLAB_RESERVED = new Set([
   "stages",
@@ -53,7 +86,23 @@ const GITLAB_RESERVED = new Set([
 export function stripYamlComments(src: string): string {
   return src
     .split(/\r?\n/)
-    .map((l) => l.replace(/(^|\s)#.*$/, ""))
+    .map((l) => {
+      let quote: string | undefined;
+      for (let i = 0; i < l.length; i++) {
+        const ch = l[i]!;
+        if (quote) {
+          if (ch === quote) quote = undefined;
+        } else if (ch === '"' || ch === "'") {
+          // An apostrophe inside a word (don't) is not a quote.
+          if (ch === "'" && i > 0 && /\w/.test(l[i - 1]!)) continue;
+          quote = ch;
+        } else if (ch === "#" && (i === 0 || /\s/.test(l[i - 1]!))) {
+          return l.slice(0, i).trimEnd();
+        }
+      }
+      // Unbalanced quotes: fall back to cutting at the first " #", the cautious reading.
+      return quote ? l.replace(/(^|\s)#.*$/, "") : l;
+    })
     .join("\n");
 }
 
@@ -209,6 +258,8 @@ interface Job {
   name: string;
   /** Text of the job's own commands only. */
   commands: string;
+  /** How the job's E2E command was recognised, if it has one. */
+  basis?: CommandBasis;
   /** Full text of the job's block. */
   text: string;
   /** Line range of the job in the file, to look for settings elsewhere. */
@@ -315,7 +366,15 @@ function parseGitlab(path: string, src: string): ParsedFile {
   const jobs: Job[] = [];
   for (const b of top) {
     if (GITLAB_RESERVED.has(b.key)) continue;
-    const scripts = ["before_script", "script"].map((k) => textOf(child(b, k))).join("\n");
+    const scripts = ["before_script", "script"]
+      .map((k) => {
+        const c = child(b, k);
+        if (!c) return "";
+        const inl = readInline(c.inline);
+        const head = inl.kind === "seq" ? inl.items.join("\n") : inl.kind === "scalar" ? inl.value : "";
+        return [head, ...c.body].join("\n");
+      })
+      .join("\n");
     const text = textOf(b);
     const why: Job["why"] = {};
     const whenB = child(b, "when");
@@ -439,6 +498,7 @@ function parseGitlab(path: string, src: string): ParsedFile {
       file: path,
       name: b.key,
       commands: scripts,
+      basis: commandBasis(scripts),
       text,
       start: b.start,
       end: b.end,
@@ -577,7 +637,7 @@ function parseGithub(path: string, src: string): ParsedFile {
       const steps = Array.isArray(stepsRead) ? stepsRead : [];
       const live = steps.filter((st) => !(st.if !== undefined && STEP_DISABLED.test(st.if)));
       const isCommand = (st: Step) =>
-        (st.run !== undefined && E2E_RUN_COMMAND.some((re) => re.test(st.run!))) || (st.uses !== undefined && /^cypress-io\/github-action@/.test(st.uses));
+        (st.run !== undefined && commandBasis(st.run) !== undefined) || (st.uses !== undefined && /^cypress-io\/github-action@/.test(st.uses));
       const commandSteps = live.filter(isCommand);
       const commands = commandSteps.map((st) => st.run ?? `uses: ${st.uses}`).join("\n");
       const jobIf = unquote(child(b, "if")?.inline ?? "");
@@ -632,6 +692,9 @@ function parseGithub(path: string, src: string): ParsedFile {
         file: path,
         name: b.key,
         commands,
+        basis: commandSteps.some((st) => st.uses !== undefined && /^cypress-io\/github-action@/.test(st.uses))
+          ? "observed"
+          : commandSteps.reduce<CommandBasis | undefined>((acc, st) => (acc === "observed" ? acc : (commandBasis(st.run ?? "") ?? acc)), undefined),
         text,
         start: offset + b.start,
         end: offset + b.end,
@@ -742,7 +805,7 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
   let unknownJob: Job | undefined;
   for (const file of parsed) {
     for (const job of file.jobs) {
-      if (job.disabled || !E2E_RUN_COMMAND.some((re) => re.test(job.commands))) continue;
+      if (job.disabled || job.basis === undefined) continue;
       if (job.enabledUnknown) unknownJob ??= job;
       else e2e.push({ job, file });
     }
@@ -757,7 +820,7 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
     };
   }
   if (e2e.length === 0) {
-    const textHit = parsed.find((p) => E2E_RUN_COMMAND.some((re) => re.test(p.lines.join("\n"))));
+    const textHit = parsed.find((p) => MENTION.test(p.lines.join("\n")));
     const inherits = parsed.find((p) => p.includesOthers || p.jobs.some((j) => j.inherits && !j.disabled));
     const reason = textHit
       ? `an E2E command appears in ${textHit.path} outside any enabled job's own script (variables, a template, an extended or disabled job)`
@@ -796,7 +859,12 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
   return {
     ...base,
     e2eJobPresent: true,
-    e2eJobs: e2e.map(({ job }) => ({ file: job.file, job: job.name, manualOnly: job.manualOnly })),
+    e2eJobs: e2e.map(({ job }) => ({
+      file: job.file,
+      job: job.name,
+      manualOnly: job.manualOnly,
+      basis: job.basis ?? "observed",
+    })),
     runsOnMergeRequest: anyOf(e2e.map(({ job }) => job.mergeRequestGate)),
     scheduledRun: anyOf(e2e.map(({ job }) => job.scheduled)),
     ...settings,
