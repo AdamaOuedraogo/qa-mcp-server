@@ -133,7 +133,9 @@ which may itself be relaying untrusted content.
   resolves the path with `realpath`, refuses a target outside
   `QA_MCP_PROJECT_DIR`, and refuses unless the resolved path and the open
   descriptor are the same file (device and inode). The read of at most
-  20,000 bytes then uses the descriptor, never the path again. Threat model:
+  20,000 bytes then uses the descriptor, never the path again. These checks
+  live in `openConfined()` (`src/utils/confinedRead.ts`), internal and not
+  exposed over MCP; `read_test_report` calls it. Threat model:
   the containment decision is bound to the opened file, not to a pathname
   that could change between a check and the open. Limitations: on a platform
   without `O_NOFOLLOW` (Windows) a final-component link is followed and only

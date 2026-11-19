@@ -69,6 +69,7 @@ src/runners.ts            operator-provided Cypress/Playwright invocation detail
 src/execution/adapter.ts  runInProject(): the only path to a live process
 src/utils/command.ts      runCommand() and sanitizeArg()
 src/utils/untrusted.ts    wrapUntrusted(): delimiters around test output and report text
+src/utils/confinedRead.ts openConfined(): bounded read confined to a root (O_NOFOLLOW, realpath, sameFile)
 src/capabilities/flaky-test-triage/
   schema.ts               observation in, judgment out (zod)
   rules.ts, repairs.ts    the expertise: signals, classifier, repair contract
