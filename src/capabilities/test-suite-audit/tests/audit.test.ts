@@ -622,3 +622,41 @@ test("a symlinked project root is resolved with realpath, and links inside it ar
     await cleanup(base);
   }
 });
+
+test("the beforeRead test hook cannot be reached through the MCP tool", async () => {
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+  const { createServer } = await import("../../../server.js");
+  const { base, project } = await tempProject();
+  const saved = process.env.QA_MCP_PROJECT_DIR;
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  const server = createServer();
+  const client = new Client({ name: "hook-test", version: "0.0.0" });
+  try {
+    await server.connect(serverSide);
+    await client.connect(clientSide);
+
+    // 1. The input schema the model sees has no such key.
+    const { tools } = await client.listTools();
+    const audit = tools.find((t) => t.name === "audit_test_suite")!;
+    assert.deepEqual(Object.keys(audit.inputSchema.properties ?? {}).sort(), ["maxSpecFiles", "observation", "path"]);
+    assert.ok(!JSON.stringify(audit.inputSchema).includes("beforeRead"));
+
+    // 2. A call that passes it anyway is not acted on: arguments are JSON, so a
+    //    function cannot arrive, and the key is dropped before the handler.
+    //    If it were honoured, this value (not callable) would make the read throw.
+    process.env.QA_MCP_PROJECT_DIR = project;
+    const res = await client.callTool({ name: "audit_test_suite", arguments: { beforeRead: "rm -rf tests" } });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]!.text;
+    assert.equal(res.isError, undefined, "the extra key is stripped, not an error");
+    assert.match(text, /# Test Suite Audit/);
+    assert.match(text, /1 spec file\(s\)/, "the scan ran normally and read tests/ok.spec.ts");
+    assert.doesNotMatch(text, /Refused files/);
+  } finally {
+    if (saved === undefined) delete process.env.QA_MCP_PROJECT_DIR;
+    else process.env.QA_MCP_PROJECT_DIR = saved;
+    await client.close();
+    await server.close();
+    await cleanup(base);
+  }
+});
