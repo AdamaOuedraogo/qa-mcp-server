@@ -19,6 +19,9 @@ What is already in place as of v0.1 and the first part of v0.2:
   execution adapter
 - First judgment capability: `triage_flaky_test` (pure, deterministic, tested)
 - Report adapters: Playwright JSON, Mochawesome, JUnit XML (internal)
+- Audit capabilities: `audit_test_suite` (static, read-only) and
+  `assess_test_strategy` (pure), with the `qa://audit-rubric` resource and the
+  `qa-audit` prompt
 - Documentation (README, Vision, Architecture, Contributing, AGENTS.md, KEEP.md)
 - Execution-boundary tests; `read_test_report` confined to the project directory
   with a bounded read; test output and reports returned as untrusted data
@@ -115,6 +118,9 @@ Only if they prove genuinely useful.
 - [ ] Connectors for first-class inputs beyond the minimal GitHub adapter:
       Jira, GitLab, incident and log platforms, knowledge bases
 - [ ] RAG over test suites, docs and past failures
+- [ ] Run-data enrichment for `audit_test_suite`: feed CI history into the
+      audit so reliability findings carry measured flakiness instead of
+      static smells
 - [ ] Additional frameworks (Vitest, Jest, k6)
 - [ ] Trace/screenshot ingestion for failure analysis
 - [ ] Notifications beyond ntfy (Slack, email)

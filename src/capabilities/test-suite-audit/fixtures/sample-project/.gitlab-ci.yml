@@ -1,0 +1,9 @@
+stages: [test]
+
+e2e:
+  stage: test
+  image: mcr.microsoft.com/playwright:v1.48.0-jammy
+  retry: 2
+  script:
+    - npm ci
+    - npx playwright test

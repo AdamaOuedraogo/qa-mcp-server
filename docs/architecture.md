@@ -71,6 +71,18 @@ rather than executing it, keeping the server safe to connect anywhere. Live
 execution is an explicit operator opt-in that reaches this runner only through
 the execution adapter (see [Execution model](#execution-model)).
 
+### Capabilities — `src/capabilities/*`
+
+A capability is the implementation of a QA *expertise*, not a wrapper around
+a tool: a normalized observation in, a structured judgment out
+(`Raw Data -> QA Expertise -> Structured Judgment`). Each lives in its own
+folder with a `schema.ts` (the contract), `rules.ts` (the expertise), a pure
+`evaluator.ts`, a `tool.ts` that exposes it over MCP, tests that pin the
+reasoning, and a `docs/reasoning.md` spec. Three exist today:
+`flaky-test-triage` (the reference), `test-suite-audit` (read-only static
+audit of a project) and `test-strategy-assessment` (practice-level assessment
+from a questionnaire).
+
 ## Execution pipeline
 
 A tool request flows through a fixed sequence of stages:
@@ -121,7 +133,9 @@ which may itself be relaying untrusted content.
   resolves the path with `realpath`, refuses a target outside
   `QA_MCP_PROJECT_DIR`, and refuses unless the resolved path and the open
   descriptor are the same file (device and inode). The read of at most
-  20,000 bytes then uses the descriptor, never the path again. Threat model:
+  20,000 bytes then uses the descriptor, never the path again. These checks
+  live in `openConfined()` (`src/utils/confinedRead.ts`), internal and not
+  exposed over MCP; `read_test_report` calls it. Threat model:
   the containment decision is bound to the opened file, not to a pathname
   that could change between a check and the open. Limitations: on a platform
   without `O_NOFOLLOW` (Windows) a final-component link is followed and only
@@ -130,8 +144,9 @@ which may itself be relaying untrusted content.
   comparison, which refuses rather than reads; a hard link inside the project
   to an outside file is indistinguishable by inode, so write access to the
   project directory stays trusted. This is not a filesystem sandbox.
-- **Output is labelled as data, best effort.** Captured test output and report
-  contents are returned between delimiter lines that carry a per-call random
+- **Output is labelled as data, best effort.** Captured test output, report
+  contents, and the source lines `audit_test_suite` quotes as evidence (each
+  finding's evidence list and the JSON judgment that repeats it) are returned between delimiter lines that carry a per-call random
   token, with a one-line notice (`src/utils/untrusted.ts`), so a body cannot
   forge the closing line and the model is told the block is data. This is
   labelling, not a security boundary: a textual wrapper cannot force a model

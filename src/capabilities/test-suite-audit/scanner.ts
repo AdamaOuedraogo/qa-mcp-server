@@ -1,0 +1,580 @@
+import { readdir, realpath } from "node:fs/promises";
+import { join, relative, resolve, sep, basename, extname } from "node:path";
+import { confineRoot, openConfined, ROOT_REFUSALS, type ConfinedRefusal } from "../../utils/confinedRead.js";
+import { analyseCi, withUnreadCiFiles } from "./ci.js";
+import type {
+  CiObservation,
+  Framework,
+  Occurrence,
+  RepoObservation,
+  RunnerConfigObservation,
+  SpecObservation,
+  TestSuiteObservation,
+} from "./schema.js";
+
+/**
+ * Static scanner: a project directory in, a *TestSuiteObservation* out.
+ *
+ * It contains no judgment — only the facts a reviewer would collect by opening
+ * files: where the specs are, what the config says, what CI does. The
+ * expertise that turns these facts into findings lives in ./rules.ts.
+ *
+ * Bounded by construction: it never follows symlinks, skips vendor/build
+ * directories, caps the number of files it opens and the size of each, and
+ * records every cap it hits in `scanNotes` so the audit can state what it
+ * did not see. It never executes anything.
+ *
+ * Confined: the root is `QA_MCP_PROJECT_DIR`, resolved with realpath. Every
+ * file is read through `openConfined()` (O_NOFOLLOW, realpath containment,
+ * device/inode match, bounded read), the same path as `read_test_report`.
+ * A refusal about the root fails the whole scan ({@link ScanRootError}); a
+ * refusal about one file is recorded in `refusedFiles` and the file is skipped.
+ */
+
+/** A refusal that concerns the audited root: the scan cannot run at all. */
+export class ScanRootError extends Error {
+  constructor(
+    readonly kind: ConfinedRefusal["kind"],
+    message: string,
+  ) {
+    super(message);
+    this.name = "ScanRootError";
+  }
+}
+
+/** Why one file was not analysed: a confined-read refusal, or a link the walk did not follow. */
+export type FileRefusalKind = ConfinedRefusal["kind"] | "symlink-not-followed";
+
+export interface RefusedFile {
+  path: string;
+  kind: FileRefusalKind;
+}
+
+export interface ScanOptions {
+  /** Max spec files to open. Others are counted but not analysed. */
+  maxSpecFiles?: number;
+  /** Max bytes read per file. */
+  maxFileBytes?: number;
+  /** Max occurrences kept per signal per file (evidence, not a census). */
+  maxOccurrencesPerSignal?: number;
+  /** Sub-folder of the project root to audit (already checked by `resolveInside()`). */
+  subPath?: string;
+  /**
+   * Tests only, never set by the MCP tool: called before each file is opened,
+   * so a test can swap the file between the walk and the read.
+   */
+  beforeRead?: (path: string) => Promise<void> | void;
+}
+
+const DEFAULTS = {
+  maxSpecFiles: 400,
+  maxFileBytes: 512 * 1024,
+  maxOccurrencesPerSignal: 5,
+};
+
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  ".next",
+  ".nuxt",
+  "test-results",
+  "playwright-report",
+  "cypress/videos",
+  "cypress/screenshots",
+  ".cache",
+  ".turbo",
+  "vendor",
+  "target",
+]);
+
+const SPEC_FILE = /\.(spec|test|cy|e2e)\.(ts|tsx|js|jsx|mjs|cjs)$/i;
+const CYPRESS_DIR_SPEC = /(^|\/)cypress\/(e2e|integration)\/.*\.(ts|js|tsx|jsx)$/i;
+const FEATURE_FILE = /\.feature$/i;
+
+// --- Spec-level detectors ----------------------------------------------------
+// Each regex names a *review smell*, not a syntax. They are deliberately
+// conservative: a false negative costs a missed remark, a false positive costs
+// the auditor's credibility.
+
+const TEST_BLOCK = /^\s*(test|it)(\.only|\.skip|\.fixme|\.todo)?\s*\(/;
+const DESCRIBE_BLOCK = /^\s*(test\.describe|describe|context)(\.only|\.skip)?\s*\(/;
+
+const HARD_WAIT = [
+  /\.waitForTimeout\s*\(/,
+  /\bcy\.wait\s*\(\s*\d+\s*\)/,
+  /\bsetTimeout\s*\(/,
+  /\bsleep\s*\(\s*\d+/,
+  /\.pause\s*\(\s*\d+/,
+];
+const FOCUSED = [/\b(test|it|describe|context)\.only\s*\(/, /\bfit\s*\(/, /\bfdescribe\s*\(/];
+const SKIPPED = [
+  /\b(test|it|describe|context)\.(skip|fixme)\s*\(/,
+  /\bxit\s*\(/,
+  /\bxdescribe\s*\(/,
+  /\bthis\.skip\s*\(\s*\)/,
+];
+const FORCED = [/force\s*:\s*true/];
+const FRAGILE_SELECTOR = [
+  /\$x\s*\(|xpath\s*=|\/\/[a-z*]+\[/i, // XPath
+  /:nth-child\s*\(|:nth-of-type\s*\(/, // positional CSS
+  /['"`](div|span|ul|li|td|tr|p)\s*>\s*(div|span|ul|li|td|tr|p|a|button)/, // tag chains
+  /locator\s*\(\s*['"`][^'"`]*\.[a-zA-Z0-9_-]+\s+\.[a-zA-Z0-9_-]+/, // ".a .b" class chains
+  /cy\.get\s*\(\s*['"`][^'"`]*\.[a-zA-Z0-9_-]+\s+\.[a-zA-Z0-9_-]+/,
+  /cy\.get\s*\(\s*['"`](div|span|ul|li|td|tr|p)\b/,
+];
+const SEMANTIC_LOCATOR = [
+  /\.getBy(Role|Label|Text|Placeholder|TestId|Title|AltText)\s*\(/,
+  /\bcy\.(findByRole|findByLabelText|findByText|findByTestId|getByTestId)\s*\(/,
+  /\bcy\.get\s*\(\s*['"`]\[data-(test|testid|test-id|cy)=/,
+];
+const CONDITIONAL = [/^\s*if\s*\(/, /^\s*}\s*else\b/, /^\s*try\s*{/, /^\s*catch\s*\(/];
+const SECRET = [
+  /(password|passwd|pwd|secret|token|apikey|api_key)\s*[:=]\s*['"`][^'"`]{4,}['"`]/i,
+  // fill/type into a password field with a literal value: page.fill('#password', 'x'), cy.get('#pwd').type('x')
+  /\.(fill|type)\s*\(\s*['"`][^'"`]*(password|passwd|pwd|mot ?de ?passe)[^'"`]*['"`]\s*,\s*['"`][^'"`]{4,}['"`]/i,
+  /(password|passwd|pwd)[^'"`\n]*['"`]\s*\)\s*\.(fill|type)\s*\(\s*['"`][^'"`]{4,}['"`]/i,
+  /(?:^|[^a-zA-Z0-9_$])(?:getBy(?:Label|Placeholder|Role)\s*\(\s*['"`][^'"`]*password[^'"`]*['"`][^)]*\))\s*\.(fill|type)\s*\(\s*['"`][^'"`]{4,}['"`]/i,
+];
+const HARD_URL = [/['"`]https?:\/\/(?!localhost|127\.0\.0\.1|example\.com|example\.org)[^'"`\s]+['"`]/i];
+const UI_LOGIN = [
+  /\.(fill|type)\s*\([^)]*(password|mot ?de ?passe)[^)]*\)/i,
+  /\bgetBy(Label|Placeholder|Role)\s*\(\s*['"`][^'"`]*password/i,
+  /\bcy\.get\s*\([^)]*password[^)]*\)\s*\.type\s*\(/i,
+];
+const SESSION_REUSE = [/storageState/, /cy\.session\s*\(/, /globalSetup/, /\bauth\.setup\b/];
+const PAGE_OBJECT_IMPORT = [
+  /from\s+['"`][^'"`]*(page|pages|pageobjects?|page-objects?|fixtures?|support|commands|helpers?|components?)[^'"`]*['"`]/i,
+  /require\s*\(\s*['"`][^'"`]*(page|pages|fixtures?|support|commands)[^'"`]*['"`]\s*\)/i,
+  /test\.extend\s*</,
+  /\bimport\s*{[^}]*\btest\b[^}]*}\s*from\s+['"`]\.{1,2}\//, // custom fixture-based test
+];
+// Criticality of the journey a test covers (P0 / P1 / P2), not defect priority.
+const CRITICALITY_TAG = /@(p[0-2]|critical)(?![\w-])/gi;
+// When or how a test runs: scope and execution tags. Reported separately; they
+// do not say how critical a journey is, so they never satisfy COV-001.
+const SCOPE_TAG = /@(smoke|sanity|regression|nightly|slow|wip)(?![\w-])/gi;
+// Inline assertions, plus calls to helpers whose *name* says they assert
+// (`verifyTotal()`, `assertLoggedIn()`, `checkoutPage.shouldShowError()`).
+// This is a heuristic: a helper named `confirmOrder()` that asserts inside
+// is still missed, and the finding it feeds (COV-004) says so.
+const ASSERTION = [
+  /\bexpect\s*\(/,
+  /\.should\s*\(/,
+  /\bassert\b/,
+  /\.toMatchSnapshot\s*\(/,
+  /\b(assert|verify|check|validate|expect|should)[A-Z_]\w*\s*\(/,
+  /\.(assert|verify|check|validate|expect|should)[A-Z_]?\w*\s*\(/,
+];
+
+function matchAny(line: string, patterns: RegExp[]): boolean {
+  return patterns.some((p) => p.test(line));
+}
+
+function pushOcc(list: Occurrence[], line: number, text: string, cap: number): void {
+  if (list.length >= cap) return;
+  list.push({ line, snippet: text.trim().slice(0, 200) });
+}
+
+/** Analyse one spec file's text. Exported for tests; pure. */
+export function analyseSpec(path: string, source: string, cap = DEFAULTS.maxOccurrencesPerSignal): SpecObservation {
+  const lines = source.split(/\r?\n/);
+  const obs: SpecObservation = {
+    path,
+    lines: lines.length,
+    tests: 0,
+    hardWaits: [],
+    focusedTests: [],
+    skippedTests: [],
+    forcedActions: [],
+    fragileSelectors: [],
+    conditionalFlow: [],
+    hardcodedSecrets: [],
+    hardcodedUrls: [],
+    uiLoginSteps: [],
+    testsWithoutAssertion: 0,
+    usesSemanticLocators: false,
+    usesPageObjectOrFixture: false,
+    priorityTags: [],
+    scopeTags: [],
+  };
+
+  const tags = new Set<string>();
+  const scope = new Set<string>();
+  let depth = 0; // brace depth, to know when we're inside a test body
+  let inTest = false;
+  let testDepth = 0;
+  let testHasAssertion = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i] ?? "";
+    const n = i + 1;
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+
+    const startsTest = TEST_BLOCK.test(raw);
+    if (startsTest) {
+      if (inTest && !testHasAssertion) obs.testsWithoutAssertion++;
+      obs.tests++;
+      inTest = true;
+      testDepth = depth;
+      testHasAssertion = false;
+    }
+    if (TEST_BLOCK.test(raw) || DESCRIBE_BLOCK.test(raw) || /grep\s*:|tag\s*:|tags\s*:/.test(raw)) {
+      for (const m of raw.matchAll(CRITICALITY_TAG)) tags.add(m[0].toLowerCase());
+      for (const m of raw.matchAll(SCOPE_TAG)) scope.add(m[0].toLowerCase());
+    }
+
+    if (matchAny(raw, HARD_WAIT)) pushOcc(obs.hardWaits, n, raw, cap);
+    if (matchAny(raw, FOCUSED)) pushOcc(obs.focusedTests, n, raw, cap);
+    if (matchAny(raw, SKIPPED)) pushOcc(obs.skippedTests, n, raw, cap);
+    if (matchAny(raw, FORCED)) pushOcc(obs.forcedActions, n, raw, cap);
+    if (matchAny(raw, FRAGILE_SELECTOR)) pushOcc(obs.fragileSelectors, n, raw, cap);
+    if (matchAny(raw, SECRET)) pushOcc(obs.hardcodedSecrets, n, raw.replace(/['"`][^'"`]+['"`]/g, "'***'"), cap);
+    if (matchAny(raw, HARD_URL)) pushOcc(obs.hardcodedUrls, n, raw, cap);
+    if (matchAny(raw, UI_LOGIN)) pushOcc(obs.uiLoginSteps, n, raw.replace(/['"`][^'"`]+['"`]/g, "'***'"), cap);
+    if (inTest && matchAny(raw, CONDITIONAL)) pushOcc(obs.conditionalFlow, n, raw, cap);
+    if (matchAny(raw, SEMANTIC_LOCATOR)) obs.usesSemanticLocators = true;
+    if (matchAny(raw, PAGE_OBJECT_IMPORT)) obs.usesPageObjectOrFixture = true;
+    if (inTest && matchAny(raw, ASSERTION)) testHasAssertion = true;
+
+    // Track braces to detect the end of a test body (good enough for specs).
+    // On the line that opens a test, `({ page }) => {` closes a brace before
+    // opening the body, so only the line's *net* change counts there.
+    for (const ch of raw) {
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (!startsTest && inTest && depth <= testDepth) endTest();
+      }
+    }
+    if (startsTest && depth <= testDepth) endTest(); // one-liner test
+  }
+  if (inTest && !testHasAssertion) obs.testsWithoutAssertion++;
+
+  function endTest(): void {
+    if (!testHasAssertion) obs.testsWithoutAssertion++;
+    inTest = false;
+    testHasAssertion = false;
+  }
+
+  obs.priorityTags = [...tags].sort();
+  obs.scopeTags = [...scope].sort();
+  return obs;
+}
+
+// --- Config detectors --------------------------------------------------------
+
+function bool(re: RegExp, src: string): boolean | undefined {
+  return re.test(src) ? true : undefined;
+}
+
+/** Read what matters from a Playwright or Cypress config source. Pure. */
+export function analyseRunnerConfig(configFile: string | undefined, source: string, framework: Framework): RunnerConfigObservation {
+  const reporters = new Set<string>();
+  for (const m of source.matchAll(/['"`](html|json|junit|list|dot|line|github|blob|allure-playwright|mochawesome|mocha-junit-reporter|cypress-multi-reporters|spec)['"`]/g)) {
+    reporters.add(m[1]!);
+  }
+  const retries = source.match(/retries\s*:\s*(\d+)/)?.[1];
+  const retriesTernary = /retries\s*:\s*process\.env\.CI\s*\?\s*(\d+)/.exec(source)?.[1];
+  const workersNum = source.match(/workers\s*:\s*(\d+)/)?.[1];
+  const workersCi = /workers\s*:\s*process\.env\.CI\s*\?\s*(\d+)/.exec(source)?.[1];
+  const workersPct = source.match(/workers\s*:\s*['"`](\d+%)['"`]/)?.[1];
+  const projects = (source.match(/\bname\s*:\s*['"`][^'"`]+['"`]/g) ?? []).length;
+  const timeout = source.match(/^\s*timeout\s*:\s*(\d+)/m)?.[1];
+
+  const traceVal = source.match(/trace\s*:\s*['"`]([a-z-]+)['"`]/)?.[1];
+  const screenshotVal = source.match(/screenshot(OnRunFailure)?\s*:\s*(['"`]([a-z-]+)['"`]|true|false)/);
+  const videoVal = source.match(/video\s*:\s*(['"`]([a-z-]+)['"`]|true|false)/);
+
+  return {
+    configFile,
+    retries: retriesTernary !== undefined ? Number(retriesTernary) : retries !== undefined ? Number(retries) : undefined,
+    workers: workersPct ?? (workersNum !== undefined ? Number(workersNum) : undefined),
+    workersInCi: workersCi !== undefined ? Number(workersCi) : undefined,
+    fullyParallel: bool(/fullyParallel\s*:\s*true/, source),
+    reporters: [...reporters].sort(),
+    traceOnFailure:
+      framework === "cypress" ? undefined : traceVal ? traceVal !== "off" : source.includes("trace") ? undefined : false,
+    screenshotOnFailure: screenshotVal
+      ? screenshotVal[2] !== "false" && screenshotVal[3] !== "off"
+      : framework === "cypress"
+        ? true // Cypress default: screenshotOnRunFailure=true
+        : undefined,
+    videoOnFailure: videoVal ? videoVal[1] !== "false" && videoVal[2] !== "off" : undefined,
+    baseUrlConfigured: /baseURL\s*:|baseUrl\s*:/.test(source),
+    testIdAttributeConfigured: bool(/testIdAttribute\s*:/, source),
+    storageStateOrSession: matchAny(source, SESSION_REUSE),
+    projects: framework === "playwright" ? projects || undefined : undefined,
+    globalTimeoutMs: timeout ? Number(timeout) : undefined,
+  };
+}
+
+// CI analysis lives in ./ci.ts (job-level, no YAML parser); re-exported here.
+export { analyseCi } from "./ci.js";
+
+// --- Directory walk -----------------------------------------------------------
+
+interface Found {
+  specs: string[];
+  features: string[];
+  configs: string[];
+  ciFiles: string[];
+  packageJson?: string;
+  tsconfig?: string;
+  lint: boolean;
+  formatter: boolean;
+  lockfile: boolean;
+  readmes: string[];
+  pageObjectsDir: boolean;
+  fixturesDir: boolean;
+}
+
+async function walk(root: string, maxFiles: number, notes: string[], refused: RefusedFile[]): Promise<Found> {
+  const found: Found = {
+    specs: [],
+    features: [],
+    configs: [],
+    ciFiles: [],
+    lint: false,
+    formatter: false,
+    lockfile: false,
+    readmes: [],
+    pageObjectsDir: false,
+    fixturesDir: false,
+  };
+  let visited = 0;
+  const HARD_CAP = 20_000;
+  const stack: string[] = [root];
+
+  while (stack.length) {
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (++visited > HARD_CAP) {
+        notes.push(`Directory walk stopped after ${HARD_CAP} entries.`);
+        return found;
+      }
+      const abs = join(dir, e.name);
+      const rel = relative(root, abs).split(sep).join("/");
+      if (e.isSymbolicLink()) {
+        refused.push({ path: rel, kind: "symlink-not-followed" });
+        continue;
+      }
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name) || SKIP_DIRS.has(rel)) continue;
+        const lower = e.name.toLowerCase();
+        if (/^(pages?|page-?objects?|pom|screens?)$/.test(lower)) found.pageObjectsDir = true;
+        if (/^(fixtures?|seeds?|test-?data|data)$/.test(lower)) found.fixturesDir = true;
+        if (rel === ".github/workflows" || e.name === ".github") {
+          stack.push(abs);
+          continue;
+        }
+        if (e.name.startsWith(".") && e.name !== ".github") continue;
+        stack.push(abs);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      const name = e.name;
+      const lower = name.toLowerCase();
+      if (SPEC_FILE.test(name) || CYPRESS_DIR_SPEC.test(rel)) found.specs.push(rel);
+      else if (FEATURE_FILE.test(name)) found.features.push(rel);
+      else if (/^(playwright|cypress)\.config\.(ts|js|mjs|cjs|mts)$/.test(name)) found.configs.push(rel);
+      else if (name === "cypress.json") found.configs.push(rel);
+      else if (name === ".gitlab-ci.yml" && rel === name) found.ciFiles.push(rel);
+      else if (rel.startsWith(".github/workflows/") && /\.ya?ml$/.test(name)) found.ciFiles.push(rel);
+      else if (name === "package.json" && rel === name) found.packageJson = rel;
+      else if (name === "tsconfig.json" && rel === name) found.tsconfig = rel;
+      else if (/^(\.eslintrc|eslint\.config|biome\.json)/.test(lower)) found.lint = true;
+      else if (/^(\.prettierrc|prettier\.config|biome\.json)/.test(lower)) found.formatter = true;
+      else if (/^(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?)$/.test(name) && rel === name) found.lockfile = true;
+      else if (/^(readme|contributing|testing)/i.test(name) && /\.md$/i.test(name)) found.readmes.push(rel);
+    }
+  }
+  if (found.specs.length > maxFiles) {
+    notes.push(`${found.specs.length} spec files found; only the first ${maxFiles} (sorted) were analysed.`);
+  }
+  found.specs.sort();
+  return found;
+}
+
+const ROOT_MESSAGES: Partial<Record<ConfinedRefusal["kind"], string>> = {
+  "root-unset":
+    "audit_test_suite needs QA_MCP_PROJECT_DIR: it reads only inside that directory. " +
+    "Set it to the absolute path of the project to audit, or pass `observation` instead.",
+  "root-not-absolute": "QA_MCP_PROJECT_DIR must be an absolute path.",
+  "root-missing": "The project directory (QA_MCP_PROJECT_DIR) does not exist or cannot be resolved.",
+  "outside-root": "The audited sub-folder resolves outside the project directory (through a symbolic link).",
+  "open-failed": "The audited sub-folder does not exist or cannot be resolved.",
+};
+
+function rootError(kind: ConfinedRefusal["kind"]): ScanRootError {
+  return new ScanRootError(kind, ROOT_MESSAGES[kind] ?? `The audited root was refused (${kind}).`);
+}
+
+/**
+ * Resolve the audited root: the project directory, then the optional
+ * sub-folder, both with realpath. Throws {@link ScanRootError} when the
+ * project directory is unset, not absolute or unresolvable, or when the
+ * sub-folder is missing or resolves outside the project directory.
+ */
+export async function resolveScanRoot(
+  projectDir: string | undefined,
+  subPath?: string,
+): Promise<{ realRoot: string; realTarget: string }> {
+  const root = await confineRoot(projectDir);
+  if (!root.ok) throw rootError(root.refusal.kind);
+  if (!subPath) return { realRoot: root.realRoot, realTarget: root.realRoot };
+  let realTarget: string;
+  try {
+    realTarget = await realpath(resolve(root.realRoot, subPath));
+  } catch {
+    throw rootError("open-failed");
+  }
+  if (realTarget !== root.realRoot && !realTarget.startsWith(root.realRoot + sep)) throw rootError("outside-root");
+  return { realRoot: root.realRoot, realTarget };
+}
+
+interface ReadContext {
+  realRoot: string;
+  realTarget: string;
+  maxBytes: number;
+  notes: string[];
+  refused: RefusedFile[];
+  beforeRead?: (path: string) => Promise<void> | void;
+}
+
+/**
+ * Read at most `ctx.maxBytes` bytes of `rel` (relative to the audited
+ * folder) as UTF-8, through `openConfined()` against the project root. A
+ * per-file refusal is recorded and returns "". A root-level refusal throws.
+ * Exported for tests only; not exposed over MCP.
+ */
+export async function readConfined(ctx: ReadContext, rel: string): Promise<string> {
+  await ctx.beforeRead?.(rel);
+  const fromRoot = relative(ctx.realRoot, join(ctx.realTarget, rel)).split(sep).join("/");
+  const r = await openConfined(ctx.realRoot, fromRoot, ctx.maxBytes, { fill: true });
+  if (!r.ok) {
+    if (ROOT_REFUSALS.has(r.refusal.kind)) throw rootError(r.refusal.kind);
+    ctx.refused.push({ path: rel, kind: r.refusal.kind });
+    return "";
+  }
+  if (r.size > ctx.maxBytes) ctx.notes.push(`${rel}: truncated to ${ctx.maxBytes} bytes.`);
+  return r.bytes.toString("utf8");
+}
+
+/**
+ * Scan the project directory (or `options.subPath` under it) and return a
+ * bounded observation. Throws {@link ScanRootError} when the root is refused.
+ * Never throws for one unreadable file: it records it in `refusedFiles`, so a
+ * partial scan is still an honest observation.
+ */
+export async function scanProject(projectDir: string | undefined, options: ScanOptions = {}): Promise<TestSuiteObservation> {
+  const opt = { ...DEFAULTS, ...options };
+  const notes: string[] = [];
+  const refused: RefusedFile[] = [];
+  const { realRoot, realTarget } = await resolveScanRoot(projectDir, opt.subPath);
+  const root = realTarget;
+  const ctx: ReadContext = { realRoot, realTarget, maxBytes: opt.maxFileBytes, notes, refused, beforeRead: opt.beforeRead };
+  const read = (rel: string) => readConfined(ctx, rel);
+  const found = await walk(root, opt.maxSpecFiles, notes, refused);
+
+  // Framework
+  const hasPw = found.configs.some((c) => c.startsWith("playwright")) || found.specs.some((s) => /\.spec\.(ts|js)/.test(s) && !/cypress/.test(s));
+  const hasCy = found.configs.some((c) => c.startsWith("cypress")) || found.specs.some((s) => /cypress\/|\.cy\./.test(s));
+  const framework: Framework = hasPw && hasCy ? "mixed" : hasPw ? "playwright" : hasCy ? "cypress" : "unknown";
+
+  // Specs
+  const specs: SpecObservation[] = [];
+  for (const rel of found.specs.slice(0, opt.maxSpecFiles)) {
+    const src = await read(rel);
+    if (src) specs.push(analyseSpec(rel, src, opt.maxOccurrencesPerSignal));
+  }
+  if (found.features.length) notes.push(`${found.features.length} Gherkin .feature files found (BDD layer) — step definitions were analysed as specs only if they match spec naming.`);
+
+  // Runner config (prefer the file matching the dominant framework)
+  const configRel = found.configs.find((c) => (framework === "cypress" ? c.startsWith("cypress") : c.startsWith("playwright"))) ?? found.configs[0];
+  const refusalOf = (rel: string) => refused.find((f) => f.path === rel);
+  const configSrc = configRel ? await read(configRel) : "";
+  // A config that was found but refused must not reach the rules as present.
+  const configRefusal = configRel ? refusalOf(configRel) : undefined;
+  const runnerConfig = analyseRunnerConfig(configRefusal ? undefined : configRel, configRefusal ? "" : configSrc, framework);
+  if (configRefusal) {
+    runnerConfig.configNotRead = { path: configRefusal.path, kind: configRefusal.kind };
+    notes.push(`${configRefusal.path} was found but not read (${configRefusal.kind}); runner settings are not observed.`);
+  } else if (!configRel) notes.push("No playwright.config/cypress.config found at or below the audited root.");
+  // storageState/session may live in specs/support rather than the config.
+  if (!runnerConfig.storageStateOrSession) {
+    for (const rel of found.specs.slice(0, opt.maxSpecFiles)) {
+      if (/auth\.setup|\.session\./.test(rel)) {
+        runnerConfig.storageStateOrSession = true;
+        break;
+      }
+    }
+  }
+
+  // CI
+  const ciFiles: Array<{ path: string; source: string }> = [];
+  const ciUnread: RefusedFile[] = [];
+  const ciPaths = found.ciFiles.slice(0, 20);
+  for (const rel of ciPaths) {
+    const source = await read(rel);
+    const r = refusalOf(rel);
+    if (r) ciUnread.push(r);
+    else ciFiles.push({ path: rel, source });
+  }
+  const ci = withUnreadCiFiles(analyseCi(ciFiles), ciPaths, ciUnread);
+
+  // Repo
+  const pkgSrc = found.packageJson ? await read(found.packageJson) : "";
+  let pkg: { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> } = {};
+  try {
+    pkg = pkgSrc ? JSON.parse(pkgSrc) : {};
+  } catch {
+    notes.push("package.json could not be parsed.");
+  }
+  const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+  const scripts = Object.entries(pkg.scripts ?? {});
+  const tsSrc = found.tsconfig ? await read(found.tsconfig) : "";
+  const readmeTexts = await Promise.all(found.readmes.slice(0, 5).map((r) => read(r)));
+  const repo: RepoObservation = {
+    typescript: Boolean(found.tsconfig) || specs.some((s) => extname(s.path) === ".ts"),
+    tsStrict: tsSrc ? /"strict"\s*:\s*true/.test(tsSrc) : undefined,
+    lintConfigured: found.lint || Boolean(deps["eslint"] ?? deps["@biomejs/biome"]),
+    formatterConfigured: found.formatter || Boolean(deps["prettier"]),
+    lockfile: found.lockfile,
+    e2eScript: scripts.some(([k, v]) => /e2e|playwright|cypress|test:ui|test:int/i.test(k) || /playwright test|cypress run/i.test(v)),
+    testingReadme: readmeTexts.some((t) => /##?\s*(test|e2e|qa|automation)/i.test(t)) || found.readmes.some((r) => /testing/i.test(r)),
+    pageObjectsDir: found.pageObjectsDir,
+    fixturesOrSeedDir: found.fixturesDir,
+    frameworkVersion: deps["@playwright/test"] ?? deps["playwright"] ?? deps["cypress"],
+    packageJsonFound: Boolean(found.packageJson) && Object.keys(pkg).length > 0,
+  };
+
+  return {
+    projectName: basename(root),
+    framework,
+    specs,
+    totalSpecFilesFound: found.specs.length,
+    runnerConfig,
+    ci,
+    repo,
+    scanNotes: refused.length
+      ? [
+          `${refused.length} file(s) refused and not analysed: ` +
+            refused.map((f) => `${f.path} (${f.kind})`).join(", ") +
+            ".",
+          ...notes,
+        ]
+      : notes,
+    ...(refused.length ? { refusedFiles: refused } : {}),
+  };
+}

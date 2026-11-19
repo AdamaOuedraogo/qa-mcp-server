@@ -61,14 +61,15 @@ src/index.ts              stdio entry point; diagnostics go to stderr
 src/server.ts             createServer(): register calls only, no logic
 src/tools/                run_playwright_test, run_cypress_test, read_test_report
 src/tools/callerArgs.ts   callerArg(): refuses option-like, absolute and .. caller values
-src/resources/            qa://test-strategy, qa://playwright-guidelines
-src/prompts/              generate-playwright-test, analyze-test-failure
+src/resources/            qa://test-strategy, qa://playwright-guidelines, qa://audit-rubric
+src/prompts/              generate-playwright-test, analyze-test-failure, qa-audit
 src/config.ts             execution mode, project dir, timeout (env, read per call)
 src/environments.ts       closed environment enum -> operator-provided base URL
 src/runners.ts            operator-provided Cypress/Playwright invocation details
 src/execution/adapter.ts  runInProject(): the only path to a live process
 src/utils/command.ts      runCommand() and sanitizeArg()
-src/utils/untrusted.ts    wrapUntrusted(): delimiters around test output and report text
+src/utils/untrusted.ts    wrapUntrusted(): delimiters around test output, report text, audit excerpts
+src/utils/confinedRead.ts openConfined(): bounded read confined to a root (O_NOFOLLOW, realpath, sameFile)
 src/capabilities/flaky-test-triage/
   schema.ts               observation in, judgment out (zod)
   rules.ts, repairs.ts    the expertise: signals, classifier, repair contract
@@ -76,6 +77,21 @@ src/capabilities/flaky-test-triage/
   adapters.ts             Playwright JSON, Mochawesome, JUnit XML -> observations
   tool.ts, prompts/       MCP exposure: triage_flaky_test, flaky-test-triage
   tests/, fixtures/, examples/, docs/reasoning.md
+src/capabilities/test-suite-audit/
+  schema.ts               observation (files/config/CI facts) in, audit judgment out
+  scanner.ts              bounded, read-only project walk; facts only, no judgment
+  rules.ts                the expertise: 30 finding rules, axis scoring, hotspots, plan
+  ci.ts                   analyseCi(): CI files split into jobs, settings per E2E job
+  evaluator.ts            pure orchestration: auditTestSuite()
+  tool.ts                 audit_test_suite; refuses without QA_MCP_PROJECT_DIR, reads via openConfined()
+  fixtures/sample-project a deliberately smelly Playwright project (excluded from tsc)
+  tests/, docs/reasoning.md
+src/capabilities/test-strategy-assessment/
+  schema.ts               typed questionnaire (every answer accepts "unknown") in, judgment out
+  rules.ts                gap rules, question bank, scoring, service mapping, 30/60/90 plan
+  evaluator.ts            pure orchestration: assessTestStrategy()
+  tool.ts                 assess_test_strategy
+  tests/
 examples/                 sample spec; triage-report.mjs (imports from dist/)
 ```
 
@@ -131,7 +147,8 @@ from environment variables and is trusted. Preserve all of the following:
 - Timeouts, output size limits, `sanitizeArg()`, the `..` traversal check, the
   `callerArg()` refusals (option-like, absolute, `..`), the `read_test_report`
   confinement (realpath inside `QA_MCP_PROJECT_DIR`, bounded read) and the
-  untrusted-data wrapping of test output and report text stay in place.
+  untrusted-data wrapping of test output, report text and audit excerpts stay
+  in place.
 
 Describe these protections as they are, and state intended guarantees as
 intentions. Current limitations to keep in mind:
@@ -142,7 +159,8 @@ intentions. Current limitations to keep in mind:
   `O_NOFOLLOW` where available, `realpath` and a device/inode comparison with
   the opened descriptor; that is not a filesystem sandbox either, and it needs
   the variable even in dry-run mode.
-- The untrusted-data delimiters around test output and report text are
+- The untrusted-data delimiters around test output, report text and audit
+  excerpts are
   best-effort labelling with a per-call token, not a security boundary.
 - Free-form caller strings are stripped of control characters and refused when
   option-like, absolute or containing `..`; they are not allowlisted.
@@ -177,6 +195,44 @@ documentation updates.
   server emits: no weakened or removed assertions, no skipped or disabled
   tests, no arbitrary sleeps, no blanket retries, no expected values edited to
   match wrong behavior.
+
+## Audit capabilities
+
+- `audit_test_suite` is static and read-only. It must never execute anything;
+  keep the scanner free of process spawning and of network access.
+- The audited root is `QA_MCP_PROJECT_DIR`, with no working-directory
+  fallback: without it the tool refuses. `path` must stay inside it, lexically
+  (`resolveInside()` in `tool.ts`) and after `realpath` (`resolveScanRoot()`).
+  Every file is read through `openConfined()`. A root-level refusal fails the
+  whole call and is never a caveat; a per-file refusal goes in `refusedFiles`
+  and is stated in the output with its kind. Preserve the `..`, absolute-path
+  and control-character rejections and the file/size caps.
+- Credential redaction happens at the output boundary (`redact.ts`, applied in
+  the evaluator to every snippet, path and note) so caller-supplied
+  observations are covered too. Keep it there; add shapes rather than moving it.
+- `resolveInside()` rejects malformed paths (control characters, drive/UNC
+  prefixes) rather than cleaning them. Keep rejection, not cleaning.
+- Findings carry `basis: observed | not_observed`. Rules that depend on a file
+  that was not found must not fire; report the gap (`CFG-001`, `COV-005`) with
+  `not_observed` instead. Keep `completeness` honest.
+- `analyseCi()` (`ci.ts`) requires a real run command in an enabled job's own
+  script after stripping YAML comments; mentions, variables, templates, image
+  names and comments are not evidence of an E2E job. A setting counts only
+  when it sits in that job; otherwise it is not established (`undefined`),
+  and rules report it `not_observed`, never observed. Manual-only or
+  allowed-to-fail jobs are not merge-request gates. A CI behaviour is stated
+  only with structural and semantic evidence (every `true` carries
+  `ci.evidence`); an abstention is for an unsupported construct, never a
+  cover for misreading a supported one. Keep the construct lists in the
+  capability README in sync with `ci.ts`.
+- `rules.ts` implements `docs/reasoning.md`. Change them together, with tests.
+- A static audit never awards level 4 on an axis that has findings or lacks
+  positive signals. `caveats` must keep stating what static analysis cannot see.
+- In `assess_test_strategy`, an `unknown` answer never produces a gap; it
+  produces an open question and lowers `confidence`. Unknowns cap an axis at 2.
+- Neither capability's recommendations may suggest hiding a failure (sleeps,
+  skips, weakened assertions, blanket retries); several rules exist to flag those.
+- Both evaluators stay pure and deterministic.
 
 ## Changes and validation
 
