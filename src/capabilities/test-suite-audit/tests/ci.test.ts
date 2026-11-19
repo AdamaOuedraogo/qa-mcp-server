@@ -503,3 +503,14 @@ test("supported, not opaque: a job of known commands only gives an observed abse
   assert.equal(o.ci.e2eJobPresent, false);
   assert.equal(o.ci.e2eJobNotEstablished, undefined, "every command was read; none runs E2E");
 });
+
+test("unsupported: a multi-document file (spec header + ---) abstains; a leading --- does not", () => {
+  const o = gitlab(`spec:\n  inputs:\n    stage:\n      default: test\n---\ne2e:\n  script: [npx playwright test]\n  rules:\n    - if: $CI_PIPELINE_SOURCE == "merge_request_event"\n`);
+  assert.equal(o.ci.e2eJobPresent, false);
+  assert.match(o.ci.e2eJobNotEstablished ?? "", /several YAML documents/);
+  assertNoPositiveClaim(o, ["runsOnMergeRequest"]);
+
+  const leading = gitlab(`---\ne2e:\n  script: [npx playwright test]\n`);
+  assert.equal(leading.ci.e2eJobPresent, true, "a single document that starts with --- is read");
+  assertTrueValuesHaveEvidence(leading);
+});

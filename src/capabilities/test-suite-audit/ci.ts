@@ -274,6 +274,13 @@ function duplicateKey(b: Block): string | undefined {
   return undefined;
 }
 
+/** A `---` separator after content: several YAML documents, which this reader does not separate. */
+function multiDocument(lines: string[]): boolean {
+  const first = lines.findIndex((l) => !blank(l));
+  return lines.some((l, i) => i > first && /^---\s*$/.test(l));
+}
+const MULTI_DOC = "the file has several YAML documents (---), which this reader does not separate";
+
 /** Commands whose content is not in the CI file: a local script, a shell file, make and similar runners. */
 const OPAQUE = /^(?:\.{0,2}\/\S+|(?:ba|z|da)?sh\s+(?:-\S+\s+)*[^-\s]\S*|make\b|just\b|task\b)/;
 function opaqueCommand(text: string): string | undefined {
@@ -402,6 +409,7 @@ function gateFromRules(rules: GitlabRule[], source: string): { value?: boolean; 
 function parseGitlab(path: string, src: string): ParsedFile {
   const lines = stripYamlComments(src).split(/\r?\n/);
   const top = blocksAt(lines, 0);
+  const multiDoc = multiDocument(lines);
   const workflow = top.find((x) => x.key === "workflow");
   const topWorkflowRules = workflow ? Boolean(child(workflow, "rules")) : false;
   const jobs: Job[] = [];
@@ -472,7 +480,10 @@ function parseGitlab(path: string, src: string): ParsedFile {
       }
     }
     const dup = duplicateKey(b);
-    if (dup && !hidden) {
+    if (multiDoc && !hidden) {
+      disabled = false;
+      enabledUnknown = MULTI_DOC;
+    } else if (dup && !hidden) {
       // Whatever the first copy says, YAML keeps the last one: the state is unknown.
       disabled = false;
       enabledUnknown = `the job repeats the key ${dup}:; YAML keeps the last one, which this reader does not resolve`;
@@ -854,8 +865,12 @@ function parseGithub(path: string, src: string): ParsedFile {
         text,
         start: offset + b.start,
         end: offset + b.end,
-        disabled: disabled && !dup,
-        enabledUnknown: dup ? `the job repeats the key ${dup}:; YAML keeps the last one, which this reader does not resolve` : undefined,
+        disabled: disabled && !dup && !multiDocument(lines),
+        enabledUnknown: multiDocument(lines)
+          ? MULTI_DOC
+          : dup
+            ? `the job repeats the key ${dup}:; YAML keeps the last one, which this reader does not resolve`
+            : undefined,
         opaque: opaqueCommand(steps.map((st) => st.run ?? "").join("\n")),
         manualOnly,
         inherits: reusable || steps.some((st) => st.uses?.startsWith("./")),
