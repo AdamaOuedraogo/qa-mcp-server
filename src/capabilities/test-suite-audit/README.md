@@ -39,7 +39,7 @@ A module that returns `{ "hardWaits": 14 }` is a connector. This one returns:
   reliability, maintainability, feedback speed, coverage & risk,
   observability, governance. The scale is documented in the
   `qa://audit-rubric` resource.
-- **What is wrong and where** — ~30 rules, each with a severity, an effort
+- **What is wrong and where** — 30 rules, each with a severity, an effort
   (S/M/L), a `quickWin` flag ("fixable inside a two-day audit, typically in
   one pull request") and up to 8 evidence lines.
 - **Where to start** — hotspot spec files ranked by smell density.

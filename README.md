@@ -77,7 +77,7 @@ current features** — they will be built on the primitives described in the
 Two capabilities model the first days of a quality-engineering engagement:
 
 - **`audit_test_suite`** reads the code: specs, runner config, CI, repo
-  hygiene. It returns a maturity score on six axes, ~30 findings with
+  hygiene. It returns a maturity score on six axes, findings from 30 rules with
   `file:line` evidence, the hotspot files to fix first and a
   **Diagnose → Prototype → Adopt** action plan. Static and read-only.
 - **`assess_test_strategy`** reads the practice through a typed

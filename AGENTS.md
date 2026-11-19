@@ -80,7 +80,7 @@ src/capabilities/flaky-test-triage/
 src/capabilities/test-suite-audit/
   schema.ts               observation (files/config/CI facts) in, audit judgment out
   scanner.ts              bounded, read-only project walk; facts only, no judgment
-  rules.ts                the expertise: ~30 finding rules, axis scoring, hotspots, plan
+  rules.ts                the expertise: 30 finding rules, axis scoring, hotspots, plan
   ci.ts                   analyseCi(): CI files split into jobs, settings per E2E job
   evaluator.ts            pure orchestration: auditTestSuite()
   tool.ts                 audit_test_suite; refuses without QA_MCP_PROJECT_DIR, reads via openConfined()
