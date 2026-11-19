@@ -19,7 +19,7 @@ const github = (source: string) => ({ ci: analyseCi([{ path: GH, source }]), sou
 /** Lines [start, end) of a job's block: its key line and everything indented under it. */
 function jobRange(source: string, job: string): { start: number; end: number } {
   const lines = source.split("\n");
-  const start = lines.findIndex((l) => new RegExp(`^\\s*${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*$`).test(l));
+  const start = lines.findIndex((l) => new RegExp(`^\\s*${job.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:(\\s|$)`).test(l));
   assert.ok(start >= 0, `job ${job} found in the fixture`);
   const ind = /^ */.exec(lines[start]!)![0].length;
   let end = start + 1;
@@ -46,6 +46,13 @@ function assertTrueValuesHaveEvidence({ ci, source }: { ci: CiObservation; sourc
     const ev = ci.evidence?.[f];
     assert.ok(ev, `${f} is true, so it must carry evidence`);
     assert.ok(ci.e2eJobs?.some((j) => j.job === ev.job && j.file === ev.file), `${f}: evidence job ${ev.job} is an enabled E2E job`);
+    if (ev.file.includes(".github/workflows") && (f === "runsOnMergeRequest" || f === "scheduledRun")) {
+      // A GitHub gate is set by the workflow trigger: the evidence is the trigger line inside on:.
+      const r = jobRange(source, "on");
+      assert.ok(ev.line - 1 > r.start && ev.line - 1 < r.end || ev.line - 1 === r.start, `${f}: line ${ev.line} lies in on:`);
+      assert.match(lines[ev.line - 1]!, f === "scheduledRun" ? /\bschedule\b/ : /\b(pull_request|pull_request_target|merge_group)\b/);
+      continue;
+    }
     const r = jobRange(source, ev.job);
     assert.ok(ev.line - 1 >= r.start && ev.line - 1 < r.end, `${f}: line ${ev.line} (${lines[ev.line - 1]?.trim()}) lies inside job ${ev.job}`);
   }
@@ -180,4 +187,76 @@ test("GitLab supported: plain schedule rules, only: lists and job-level when", (
 
   const jobNever = gitlab(`e2e:\n  when: never\n  script: [npx playwright test]\n`);
   assert.equal(jobNever.ci.e2eJobPresent, false);
+});
+
+// --- GitHub steps: adversarial ------------------------------------------------
+
+test("GitHub: run: under env: or with: is not a step command (review fixtures)", () => {
+  const env = github(`on: [pull_request]\njobs:\n  e2e:\n    env:\n      run: npx playwright test\n    steps:\n      - run: echo hello\n`);
+  assert.equal(env.ci.e2eJobPresent, false);
+  assertNoPositiveClaim(env, ["runsOnMergeRequest"]);
+
+  const withRun = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: actions/github-script@v7\n        with:\n          run: npx playwright test\n      - run: echo hello\n`);
+  assert.equal(withRun.ci.e2eJobPresent, false);
+
+  const usesInWith = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: actions/github-script@v7\n        with:\n          script: "uses: cypress-io/github-action"\n`);
+  assert.equal(usesInWith.ci.e2eJobPresent, false);
+
+  const jobLevelRun = github(`on: [pull_request]\njobs:\n  e2e:\n    run: npx playwright test\n    steps:\n      - run: echo hello\n`);
+  assert.equal(jobLevelRun.ci.e2eJobPresent, false, "run: directly under the job is not a step");
+});
+
+test("GitHub: a disabled step does not count, a conditional or continue-on-error step is not a gate", () => {
+  const off = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - if: false\n        run: npx playwright test\n`);
+  assert.equal(off.ci.e2eJobPresent, false);
+
+  const cond = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - if: github.event_name == 'schedule'\n        run: npx playwright test\n`);
+  assert.equal(cond.ci.e2eJobPresent, true);
+  assert.equal(cond.ci.runsOnMergeRequest, undefined);
+  assert.equal(cond.ci.scheduledRun, undefined);
+  assert.match(cond.ci.reasons?.runsOnMergeRequest ?? "", /own if:/);
+  assertTrueValuesHaveEvidence(cond);
+
+  const soft = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n        continue-on-error: true\n`);
+  assert.equal(soft.ci.runsOnMergeRequest, false);
+});
+
+test("GitHub: settings come from step uses/with only, and an unread action makes them undefined, never false", () => {
+  const named = github(`on: [pull_request]\njobs:\n  e2e:\n    env:\n      NOTE: "uses: actions/upload-artifact and junit"\n    steps:\n      - name: no junit here\n        run: npx playwright test\n`);
+  assert.equal(named.ci.artifactsPublished, false, "every step read, none uploads");
+  assert.equal(named.ci.junitReportWired, undefined, "no known JUnit reporter: not established, not false");
+  assert.match(named.ci.reasons?.junitReportWired ?? "", /known JUnit reporter/);
+
+  const noCache = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: actions/setup-node@v4\n        with:\n          cache: false\n      - run: npx playwright test\n`);
+  assert.equal(noCache.ci.dependencyCache, false);
+
+  const unknown = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: acme/test-kit@v2\n      - run: npx playwright test\n`);
+  for (const f of ["artifactsPublished", "dependencyCache", "blanketJobRetry", "junitReportWired"] as const) {
+    assert.equal(unknown.ci[f], undefined, `${f}: acme/test-kit was not read`);
+  }
+  assert.match(unknown.ci.reasons?.artifactsPublished ?? "", /acme\/test-kit/);
+  assertTrueValuesHaveEvidence(unknown);
+});
+
+// --- GitHub steps: supported -------------------------------------------------
+
+test("GitHub supported: run (scalar, literal and folded blocks), the Cypress action, and known step actions", () => {
+  const o = github(
+    `on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          cache: pnpm\n      - run: |\n          pnpm install\n          npx playwright test\n      - uses: actions/upload-artifact@v4\n        if: always()\n      - uses: dorny/test-reporter@v1\n      - uses: nick-fields/retry@v3\n`,
+  );
+  assert.equal(o.ci.e2eJobPresent, true);
+  assert.deepEqual(o.ci.evidence?.e2eJobPresent, { file: GH, job: "e2e", line: 11 });
+  assert.equal(o.ci.runsOnMergeRequest, true);
+  assert.equal(o.ci.artifactsPublished, true);
+  assert.equal(o.ci.junitReportWired, true);
+  assert.equal(o.ci.blanketJobRetry, true);
+  assert.equal(o.ci.dependencyCache, true);
+  assertTrueValuesHaveEvidence(o);
+
+  const folded = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - run: >\n          npx playwright\n          test\n`);
+  assert.equal(folded.ci.e2eJobPresent, true, "a folded scalar joins its lines");
+
+  const cy = github(`on: [pull_request]\njobs:\n  e2e:\n    steps:\n      - uses: cypress-io/github-action@v6\n`);
+  assert.equal(cy.ci.e2eJobPresent, true);
+  assertTrueValuesHaveEvidence(cy);
 });

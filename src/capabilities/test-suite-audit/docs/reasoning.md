@@ -114,10 +114,17 @@ not claim a measured run time.
 ## CI detection
 
 CI files are split into jobs by indentation (`ci.ts`; no YAML parser). A job
-runs the suite only if its *own* `script:`/`before_script:` (GitLab) or a
-`run:` step / the Cypress GitHub action (GitHub) holds a run command
-(`playwright test`, `cypress run`, a `test:e2e`-style script), after YAML
-comments are stripped. The same text in `variables:`, `env:`, a template or an
+runs the suite only if its *own* `script:`/`before_script:` (GitLab), or the
+direct `run` key or a `uses: cypress-io/github-action` key of an item of
+`jobs.<job>.steps` (GitHub), holds a run command. A `run:` under `env:`,
+`with:` or the job itself is not a step command; a step with `if: false` does
+not count, and a command step with its own `if:` leaves the gate undefined.
+On GitHub, artifacts, JUnit reporting, retries and caching are read only from
+step `uses`/`with` keys; a step that uses an action outside a known list was
+not read, so those settings are undefined, never false. GitHub has no
+built-in test report, so JUnit wiring is either a known reporter action
+(true) or not established. Run commands are `playwright test`, `cypress run`
+or a `test:e2e`-style script, matched after YAML comments are stripped. The same text in `variables:`, `env:`, a template or an
 `image:` line is not an E2E job; when that is the only place it appears, or
 jobs come from `include:`/a reusable workflow, the absence of an E2E job is
 *not established* (`e2eJobNotEstablished`) rather than observed.

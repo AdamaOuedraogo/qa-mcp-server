@@ -224,6 +224,8 @@ interface Job {
   scheduled: boolean | undefined;
   /** Why a value above was left undefined. */
   why: Partial<Record<"mergeRequestGate" | "scheduled", string>>;
+  /** A setting whose carrier was not fully read, and why: never false. */
+  unread: Partial<Record<Setting, string>>;
   /** 0-based line of the construct behind each true value, inside the job. */
   at: Partial<Record<"command" | "mergeRequestGate" | "scheduled" | Setting, number>>;
   settings: Record<Setting, boolean>;
@@ -426,6 +428,11 @@ function parseGitlab(path: string, src: string): ParsedFile {
     if (scheduled) {
       at.scheduled = rules?.length ? firstLine(lines, childRange(b, "rules", off), /["']schedule["']/) : firstLine(lines, childRange(b, "only", off), /schedules/);
     }
+    at.artifacts = childRange(b, "artifacts", off)?.start;
+    at.junit = firstLine(lines, childRange(b, "artifacts", off), /^\s*junit\s*:/);
+    at.parallel = childRange(b, "parallel", off)?.start ?? firstLine(lines, childRange(b, "script", off), /--shard[= ]/);
+    at.retry = childRange(b, "retry", off)?.start;
+    at.cache = childRange(b, "cache", off)?.start;
     const retryBlock = child(b, "retry");
     const retryText = textOf(retryBlock);
     jobs.push({
@@ -443,6 +450,7 @@ function parseGitlab(path: string, src: string): ParsedFile {
       scheduled,
       why,
       at,
+      unread: {},
       settings: {
         artifacts: Boolean(child(b, "artifacts")),
         junit: /^\s*junit\s*:/m.test(textOf(child(b, "artifacts"))),
@@ -457,24 +465,91 @@ function parseGitlab(path: string, src: string): ParsedFile {
 
 // --- GitHub Actions -------------------------------------------------------------
 
-/** `run:` values of a job's steps, with their block-scalar continuation lines. */
-function githubRunText(body: string[]): string {
-  const out: string[] = [];
-  for (let i = 0; i < body.length; i++) {
-    const l = body[i]!;
-    const m = /^(\s*)(?:-\s+)?run\s*:\s*(.*)$/.exec(l);
-    if (m) {
-      const keyIndent = indentOf(l) + (l.trimStart().startsWith("-") ? 2 : 0);
-      out.push(m[2]!);
-      let j = i + 1;
-      while (j < body.length && (blank(body[j]!) || indentOf(body[j]!) > keyIndent)) out.push(body[j++]!);
-      i = j - 1;
-      continue;
-    }
-    if (/^\s*(-\s+)?uses\s*:\s*cypress-io\/github-action/.test(l)) out.push(l.trim());
-  }
-  return out.join("\n");
+/** One item of `jobs.<job>.steps`, read by its direct keys only. */
+interface Step {
+  run?: string;
+  /** 0-based line of the run command (the line that holds it in a block scalar). */
+  runLine?: number;
+  uses?: string;
+  usesLine?: number;
+  if?: string;
+  continueOnError: boolean;
+  with: Block[];
 }
+
+/** Actions whose effect on the settings below is known; any other action is not read. */
+const KNOWN_ACTIONS = /^(actions\/(checkout|setup-node|setup-python|setup-java|setup-go|cache|upload-artifact|download-artifact)|pnpm\/action-setup|oven-sh\/setup-bun|cypress-io\/github-action|dorny\/test-reporter|mikepenz\/action-junit-report|EnricoMi\/publish-unit-test-result-action|nick-fields\/retry|Wandalen\/wretry\.action)@/;
+const JUNIT_ACTIONS = /^(dorny\/test-reporter|mikepenz\/action-junit-report|EnricoMi\/publish-unit-test-result-action)@/;
+const RETRY_ACTIONS = /^(nick-fields\/retry|Wandalen\/wretry\.action)@/;
+
+/** The value of a `run:` key: a scalar, or a literal (|) / folded (>) block scalar. */
+function runValue(b: Block, absStart: number): { text: string; lines: number[] } | undefined {
+  const inl = b.inline;
+  if (/^[|>][-+]?$/.test(inl)) {
+    const body = b.body.filter((l) => !blank(l));
+    const ind = body.length ? indentOf(body[0]!) : 0;
+    const rows = b.body.map((l, i) => ({ t: l.slice(ind), at: absStart + 1 + i })).filter((r) => r.t.trim() !== "");
+    return { text: rows.map((r) => r.t).join(inl.startsWith(">") ? " " : "\n"), lines: rows.map((r) => r.at) };
+  }
+  const v = readInline(inl);
+  if (v.kind !== "scalar") return undefined;
+  return { text: v.value, lines: [absStart] };
+}
+
+/** The items of `jobs.<job>.steps`, each read by its direct keys; undefined when steps are not a block sequence. */
+function stepsOf(lines: string[], range: { start: number; end: number } | undefined): Step[] | { unsupported: string } {
+  if (!range) return [];
+  const head = lines[range.start]!;
+  const inl = readInline(head.replace(/^\s*steps\s*:/, ""));
+  if (inl.kind !== "empty") return { unsupported: inl.kind === "unsupported" ? inl.why : "steps: is not a block sequence" };
+  const steps: Step[] = [];
+  let itemIndent: number | undefined;
+  const starts: number[] = [];
+  for (let i = range.start + 1; i < range.end; i++) {
+    const l = lines[i]!;
+    if (blank(l)) continue;
+    const t = l.trimStart();
+    if (itemIndent === undefined && t.startsWith("-")) itemIndent = indentOf(l);
+    if (indentOf(l) === itemIndent && (t.startsWith("- ") || t === "-")) starts.push(i);
+  }
+  if (itemIndent === undefined) return [];
+  starts.forEach((s0, k) => {
+    const e0 = k + 1 < starts.length ? starts[k + 1]! : range.end;
+    const raw = lines.slice(s0, e0);
+    const item = [" ".repeat(itemIndent! + 2) + raw[0]!.trimStart().slice(1).trimStart(), ...raw.slice(1)];
+    const keys = blocksAt(item, itemIndent! + 2);
+    const step: Step = { continueOnError: false, with: [] };
+    for (const kb of keys) {
+      const abs = s0 + kb.start;
+      if (kb.key === "run") {
+        const v = runValue(kb, abs);
+        if (v) {
+          step.run = v.text;
+          step.runLine = v.lines.find((n) => E2E_LINE.test(lines[n]!)) ?? v.lines[0];
+        }
+      } else if (kb.key === "uses") {
+        const v = readInline(kb.inline);
+        if (v.kind === "scalar") {
+          step.uses = v.value;
+          step.usesLine = abs;
+        }
+      } else if (kb.key === "if") {
+        const v = readInline(kb.inline);
+        step.if = v.kind === "scalar" ? v.value : "(unsupported form)";
+      } else if (kb.key === "continue-on-error") {
+        const v = readInline(kb.inline);
+        step.continueOnError = v.kind === "scalar" && v.value === "true";
+      } else if (kb.key === "with") {
+        const ind = childIndent(kb.body);
+        step.with = ind === undefined ? [] : blocksAt(kb.body, ind);
+      }
+    }
+    steps.push(step);
+  });
+  return steps;
+}
+
+const STEP_DISABLED = /^(false|\$\{\{\s*false\s*\}\})$/;
 
 function parseGithub(path: string, src: string): ParsedFile {
   const lines = stripYamlComments(src).split(/\r?\n/);
@@ -497,7 +572,14 @@ function parseGithub(path: string, src: string): ParsedFile {
     const offset = jobsBlock.start + 1;
     for (const b of ind === undefined ? [] : blocksAt(jobsBlock.body, ind)) {
       const text = textOf(b);
-      const commands = githubRunText(b.body);
+      const jobOff = offset + b.start + 1;
+      const stepsRead = stepsOf(lines, childRange(b, "steps", jobOff));
+      const steps = Array.isArray(stepsRead) ? stepsRead : [];
+      const live = steps.filter((st) => !(st.if !== undefined && STEP_DISABLED.test(st.if)));
+      const isCommand = (st: Step) =>
+        (st.run !== undefined && E2E_RUN_COMMAND.some((re) => re.test(st.run!))) || (st.uses !== undefined && /^cypress-io\/github-action@/.test(st.uses));
+      const commandSteps = live.filter(isCommand);
+      const commands = commandSteps.map((st) => st.run ?? `uses: ${st.uses}`).join("\n");
       const jobIf = unquote(child(b, "if")?.inline ?? "");
       const reusable = Boolean(child(b, "uses"));
       if (reusable) includesOthers = true;
@@ -505,12 +587,46 @@ function parseGithub(path: string, src: string): ParsedFile {
       const continueOnError = /^true$/.test(unquote(child(b, "continue-on-error")?.inline ?? ""));
       const manualOnly = !disabled && manualFile;
 
+      const why: Job["why"] = {};
+      const stepIf = commandSteps.length > 0 && commandSteps.every((st) => st.if !== undefined);
+      const stepContinue = commandSteps.length > 0 && commandSteps.every((st) => st.continueOnError);
       let mergeRequestGate: boolean | undefined;
-      if (manualOnly || continueOnError) mergeRequestGate = false;
-      else if (!jobIf && !calledElsewhere && on) mergeRequestGate = prTrigger ? true : undefined;
-
       let scheduled: boolean | undefined;
-      if (!jobIf && !calledElsewhere && on) scheduled = triggers.has("schedule");
+      if (manualOnly || continueOnError || stepContinue) mergeRequestGate = false;
+      else if (stepIf) why.mergeRequestGate = why.scheduled = "the E2E step has its own if:";
+      else if (!jobIf && !calledElsewhere && on) mergeRequestGate = prTrigger ? true : undefined;
+      if (!stepIf && !jobIf && !calledElsewhere && on) scheduled = triggers.has("schedule");
+
+      // A setting carried by steps is false only when every step was read.
+      const unknownAction = steps.find((st) => st.uses !== undefined && !st.uses.startsWith("./") && !KNOWN_ACTIONS.test(st.uses));
+      const unread: Job["unread"] = {};
+      if (!Array.isArray(stepsRead)) {
+        for (const k of ["artifacts", "junit", "retry", "cache", "parallel"] as const) unread[k] = `steps: uses an unsupported form (${stepsRead.unsupported})`;
+      } else if (unknownAction) {
+        for (const k of ["artifacts", "junit", "retry", "cache"] as const) unread[k] = `step uses ${unknownAction.uses}, which is not read`;
+      }
+      unread.junit ??= "GitHub has no built-in test report; only a known JUnit reporter action establishes it";
+      const firstUses = (re: RegExp) => steps.find((st) => st.uses !== undefined && re.test(st.uses));
+      const withCache = steps.find((st) => {
+        const c = keyOf(st.with, "cache");
+        const v = c ? readInline(c.inline) : undefined;
+        return v?.kind === "scalar" && v.value !== "" && v.value !== "false";
+      });
+      const art = firstUses(/^actions\/upload-artifact@/);
+      const junit = firstUses(JUNIT_ACTIONS);
+      const retry = firstUses(RETRY_ACTIONS);
+      const cache = firstUses(/^actions\/cache@/) ?? withCache;
+      const onRange = on ? { start: on.start, end: on.end } : undefined;
+      const at: Job["at"] = {
+        command: commandSteps[0]?.runLine ?? commandSteps[0]?.usesLine,
+        // A GitHub gate is set by the workflow trigger, so its evidence is the trigger line in on:.
+        mergeRequestGate: mergeRequestGate ? firstLine(lines, onRange, /\b(pull_request|pull_request_target|merge_group)\b/) : undefined,
+        scheduled: scheduled ? firstLine(lines, onRange, /\bschedule\b/) : undefined,
+        artifacts: art?.usesLine,
+        junit: junit?.usesLine,
+        retry: retry?.usesLine,
+        cache: cache?.usesLine,
+      };
 
       jobs.push({
         file: path,
@@ -521,17 +637,18 @@ function parseGithub(path: string, src: string): ParsedFile {
         end: offset + b.end,
         disabled,
         manualOnly,
-        inherits: reusable || /uses\s*:\s*\.\//.test(text),
+        inherits: reusable || steps.some((st) => st.uses?.startsWith("./")),
         mergeRequestGate,
         scheduled,
-        why: {},
-        at: { command: firstLine(lines, { start: offset + b.start, end: offset + b.end }, E2E_LINE) },
+        why,
+        at,
+        unread,
         settings: {
-          artifacts: /uses\s*:\s*actions\/upload-artifact/.test(text),
-          junit: /junit/i.test(text),
+          artifacts: Boolean(art),
+          junit: Boolean(junit),
           parallel: /^\s*matrix\s*:/m.test(textOf(child(b, "strategy"))) || /--shard[= ]/.test(commands),
-          retry: /uses\s*:\s*(nick-fields\/retry|Wandalen\/wretry)/.test(text),
-          cache: /uses\s*:\s*actions\/cache|^\s*cache\s*:/m.test(text),
+          retry: Boolean(retry),
+          cache: Boolean(cache),
         },
       });
     }
@@ -549,12 +666,13 @@ const SETTING_ELSEWHERE: Record<Setting, RegExp> = {
   cache: /^\s*cache\s*:|uses\s*:\s*actions\/cache/m,
 };
 
-/** True / false / not established for one setting of one E2E job. */
-function settingFor(job: Job, file: ParsedFile, s: Setting): boolean | undefined {
-  if (job.settings[s]) return true;
-  if (job.inherits) return undefined;
+/** True / false / not established (with the reason) for one setting of one E2E job. */
+function settingFor(job: Job, file: ParsedFile, s: Setting): { value?: boolean; why?: string } {
+  if (job.settings[s]) return { value: true };
+  if (job.unread[s]) return { why: job.unread[s] };
+  if (job.inherits) return { why: "the job inherits from a template, a reusable workflow or a local action that was not read" };
   const elsewhere = [...file.lines.slice(0, job.start), ...file.lines.slice(job.end)].join("\n");
-  return SETTING_ELSEWHERE[s].test(elsewhere) ? undefined : false;
+  return SETTING_ELSEWHERE[s].test(elsewhere) ? { why: "the setting appears elsewhere in the file, not in the E2E job" } : { value: false };
 }
 
 /** For every true value, the file, job and 1-based line that carries it. */
@@ -649,19 +767,40 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
     return { ...base, e2eJobPresent: false, ...(reason ? { e2eJobNotEstablished: reason } : {}) };
   }
 
-  const per = (s: Setting) => anyOf(e2e.map(({ job, file }) => settingFor(job, file, s)));
+  const settingReasons: Record<string, string> = {};
+  const settingEvidence: Record<string, { file: string; job: string; line: number }> = {};
+  const per = (s: Setting, field: string) => {
+    const each = e2e.map(({ job, file }) => ({ job, r: settingFor(job, file, s) }));
+    const v = anyOf(each.map((x) => x.r.value));
+    if (v === undefined) {
+      const w = each.find((x) => x.r.why)?.r.why;
+      if (w) settingReasons[field] = w;
+    }
+    if (v === true) {
+      const hit = each.find((x) => x.r.value === true && x.job.at[s] !== undefined);
+      if (hit) settingEvidence[field] = { file: hit.job.file, job: hit.job.name, line: hit.job.at[s]! + 1 };
+    }
+    return v;
+  };
+  const settings = {
+    artifactsPublished: per("artifacts", "artifactsPublished"),
+    junitReportWired: per("junit", "junitReportWired"),
+    parallelOrSharded: per("parallel", "parallelOrSharded"),
+    blanketJobRetry: per("retry", "blanketJobRetry"),
+    dependencyCache: per("cache", "dependencyCache"),
+  };
+  const gates = reasonsOf(e2e.map(({ job }) => job)).reasons ?? {};
+  const ev = evidenceOf(e2e.map(({ job }) => job)).evidence ?? {};
+  const reasons = { ...gates, ...settingReasons };
+  const evidence = { ...ev, ...settingEvidence };
   return {
     ...base,
     e2eJobPresent: true,
     e2eJobs: e2e.map(({ job }) => ({ file: job.file, job: job.name, manualOnly: job.manualOnly })),
     runsOnMergeRequest: anyOf(e2e.map(({ job }) => job.mergeRequestGate)),
     scheduledRun: anyOf(e2e.map(({ job }) => job.scheduled)),
-    ...reasonsOf(e2e.map(({ job }) => job)),
-    ...evidenceOf(e2e.map(({ job }) => job)),
-    artifactsPublished: per("artifacts"),
-    junitReportWired: per("junit"),
-    parallelOrSharded: per("parallel"),
-    blanketJobRetry: per("retry"),
-    dependencyCache: per("cache"),
+    ...settings,
+    ...(Object.keys(reasons).length ? { reasons } : {}),
+    ...(Object.keys(evidence).length ? { evidence } : {}),
   };
 }
