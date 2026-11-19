@@ -222,7 +222,8 @@ contain `..`: a caller can pick a spec inside the project but can neither pass
 an option to the runner nor point it elsewhere.
 
 `read_test_report` is confined the same way, and needs `QA_MCP_PROJECT_DIR`
-even in dry-run mode. Its `reportPath` must be relative to that directory;
+even in dry-run mode; so does `audit_test_suite`, which reads every file
+through the same confined read and lists any file it refused. Its `reportPath` must be relative to that directory;
 absolute paths, `..` and a symbolic link as the final path component are
 refused, the resolved path must lie inside the project and must be the same
 file as the opened descriptor, and at most 20,000 bytes are read from disk

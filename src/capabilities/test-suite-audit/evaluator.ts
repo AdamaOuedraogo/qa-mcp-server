@@ -62,6 +62,9 @@ export function auditTestSuite(rawObservation: TestSuiteObservation): TestSuiteA
         ? `${high} high-severity issue(s) drive most of the risk.`
         : "No critical or high-severity issue; the work is structural.",
     hotspots.length ? `Start with ${Math.min(hotspots.length, 5)} hotspot spec file(s) — they concentrate the smells.` : "",
+    obs.refusedFiles?.length
+      ? `${obs.refusedFiles.length} file(s) were refused by the confined read and not analysed; the findings do not cover them.`
+      : "",
     completeness.score < 1 ? `Scan completeness ${Math.round(completeness.score * 100)}% — ${completeness.notes.join("; ")}.` : "",
   ]
     .filter(Boolean)

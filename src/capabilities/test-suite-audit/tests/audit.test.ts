@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { auditTestSuite } from "../evaluator.js";
-import { analyseCi, analyseRunnerConfig, analyseSpec, readCapped, scanProject } from "../scanner.js";
-import { resolveInside } from "../tool.js";
+import { analyseCi, analyseRunnerConfig, analyseSpec, readConfined, scanProject, ScanRootError, type RefusedFile } from "../scanner.js";
+import { resolveInside, runAudit } from "../tool.js";
+import { HAS_O_NOFOLLOW } from "../../../utils/confinedRead.js";
 import type { TestSuiteObservation } from "../schema.js";
 
 /**
@@ -103,10 +104,12 @@ test("scanProject walks the sample project and reports an honest observation", a
   assert.deepEqual(checkout.priorityTags, ["@p0"]);
 });
 
-test("scanProject tolerates a missing directory instead of throwing", async () => {
-  const obs = await scanProject(join(SAMPLE, "does-not-exist"));
-  assert.equal(obs.specs.length, 0);
-  assert.equal(obs.framework, "unknown");
+test("scanProject refuses a project root that does not exist instead of auditing nothing", async () => {
+  await assert.rejects(scanProject(join(SAMPLE, "does-not-exist")), (err: unknown) => {
+    assert.ok(err instanceof ScanRootError);
+    assert.equal(err.kind, "root-missing");
+    return true;
+  });
 });
 
 // --- Expertise ---------------------------------------------------------------
@@ -346,32 +349,39 @@ test("scanner does not follow symlinks and reports unreadable or truncated files
     const obs = await scanProject(dir, { maxFileBytes: 1024 });
     assert.deepEqual(obs.specs.map((s) => s.path).sort(), ["tests/big.spec.ts", "tests/ok.spec.ts"]);
     assert.ok(obs.scanNotes.some((n) => n.includes("big.spec.ts") && n.includes("truncated")));
+    assert.deepEqual(
+      (obs.refusedFiles ?? []).map((f) => `${f.path} ${f.kind}`).sort(),
+      ["tests/linked symlink-not-followed", "tests/linked.spec.ts symlink-not-followed"],
+    );
   } finally {
     await rm(base, { recursive: true, force: true });
   }
 });
 
-test("readCapped reads at most maxBytes and handles empty, small, exact and missing files", async () => {
-  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+test("readConfined reads at most maxBytes and handles empty, small, exact, missing and directory inputs", async () => {
+  const { mkdtemp, writeFile, rm, realpath } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
-  const dir = await mkdtemp(join(tmpdir(), "qa-audit-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "qa-audit-")));
   try {
     const notes: string[] = [];
+    const refused: RefusedFile[] = [];
+    const ctx = { realRoot: dir, realTarget: dir, maxBytes: 16, notes, refused };
     await writeFile(join(dir, "empty.ts"), "");
     await writeFile(join(dir, "small.ts"), "abc");
     await writeFile(join(dir, "exact.ts"), "x".repeat(16));
     await writeFile(join(dir, "big.ts"), "0123456789".repeat(10));
-    assert.equal(await readCapped(join(dir, "empty.ts"), 16, notes, "empty.ts"), "");
-    assert.equal(await readCapped(join(dir, "small.ts"), 16, notes, "small.ts"), "abc");
-    assert.equal(await readCapped(join(dir, "exact.ts"), 16, notes, "exact.ts"), "x".repeat(16));
+    assert.equal(await readConfined(ctx, "empty.ts"), "");
+    assert.equal(await readConfined(ctx, "small.ts"), "abc");
+    assert.equal(await readConfined(ctx, "exact.ts"), "x".repeat(16));
     assert.equal(notes.length, 0, "no note for files at or under the cap");
-    assert.equal(await readCapped(join(dir, "big.ts"), 16, notes, "big.ts"), "0123456789012345");
-    assert.equal(notes.length, 1);
-    assert.equal(notes[0], "big.ts: truncated to 16 bytes.");
-    assert.equal(await readCapped(join(dir, "missing.ts"), 16, notes, "missing.ts"), "");
-    assert.match(notes[1] ?? "", /^missing\.ts: could not be read \(/);
-    assert.equal(await readCapped(dir, 16, notes, "a-directory"), "");
-    assert.match(notes[2] ?? "", /^a-directory: could not be read \(/);
+    assert.equal(await readConfined(ctx, "big.ts"), "0123456789012345");
+    assert.deepEqual(notes, ["big.ts: truncated to 16 bytes."]);
+    assert.equal(await readConfined(ctx, "missing.ts"), "");
+    assert.equal(await readConfined(ctx, "."), "");
+    assert.deepEqual(refused, [
+      { path: "missing.ts", kind: "open-failed" },
+      { path: ".", kind: "not-regular-file" },
+    ]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -456,4 +466,159 @@ test("sample project: completeness is full and observed smells still cap the lev
   assert.equal(j.completeness.score, 1);
   assert.equal(j.completeness.notes.length, 0);
   assert.ok(j.overallLevel <= 1);
+});
+
+// --- Confinement (QA_MCP_PROJECT_DIR, O_NOFOLLOW, sameFile) ------------------
+
+async function tempProject() {
+  const { mkdtemp, mkdir, writeFile, realpath } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const base = await realpath(await mkdtemp(join(tmpdir(), "qa-audit-confine-")));
+  const project = join(base, "project");
+  const outside = join(base, "outside");
+  await mkdir(join(project, "tests"), { recursive: true });
+  await mkdir(outside);
+  await writeFile(join(project, "tests", "ok.spec.ts"), `test("ok", async () => { expect(1).toBe(1); });\n`);
+  await writeFile(join(outside, "ok.spec.ts"), `test.only("ESCAPED", async () => {});\n`);
+  return { base, project, outside };
+}
+
+async function cleanup(base: string) {
+  const { rm } = await import("node:fs/promises");
+  await rm(base, { recursive: true, force: true });
+}
+
+test("audit_test_suite refuses when QA_MCP_PROJECT_DIR is unset, with no cwd fallback", async () => {
+  const res = await runAudit({}, undefined);
+  assert.equal(res.isError, true);
+  const text = res.content[0]!.text;
+  assert.match(text, /needs QA_MCP_PROJECT_DIR/);
+  assert.doesNotMatch(text, /# Test Suite Audit/);
+});
+
+test("a root-level refusal fails the whole tool and is never a caveat", async () => {
+  const { base, project } = await tempProject();
+  try {
+    for (const [dir, kind] of [
+      [undefined, /needs QA_MCP_PROJECT_DIR/],
+      ["relative/project", /must be an absolute path/],
+      [join(base, "missing"), /does not exist or cannot be resolved/],
+    ] as const) {
+      const res = await runAudit({}, dir);
+      assert.equal(res.isError, true, String(dir));
+      assert.match(res.content[0]!.text, kind);
+      assert.doesNotMatch(res.content[0]!.text, /## Caveats/);
+    }
+    // The root disappearing between the walk and a read is still root-level.
+    const { rename } = await import("node:fs/promises");
+    await assert.rejects(
+      scanProject(project, { beforeRead: () => rename(project, project + "-gone") }),
+      (err: unknown) => err instanceof ScanRootError && err.kind === "root-missing",
+    );
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("refused files: the output states how many and the refusal kind of each", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { symlink } = await import("node:fs/promises");
+    await symlink(join(outside, "ok.spec.ts"), join(project, "tests", "link.spec.ts"));
+    await symlink(outside, join(project, "tests", "linkdir"));
+    const res = await runAudit({}, project);
+    assert.equal(res.isError, undefined);
+    const text = res.content[0]!.text;
+    assert.match(text, /\*\*Refused files \(2\):\*\* not analysed/);
+    assert.match(text, /- `tests\/link\.spec\.ts` — symlink-not-followed/);
+    assert.match(text, /- `tests\/linkdir` — symlink-not-followed/);
+    assert.match(text, /2 file\(s\) were refused by the confined read and not analysed/);
+    assert.match(text, /2 file\(s\) refused and not analysed: tests\/link\.spec\.ts \(symlink-not-followed\)/);
+    assert.doesNotMatch(text, /ESCAPED/);
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("a symlinked spec file is never read, only listed as refused", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { symlink } = await import("node:fs/promises");
+    await symlink(join(outside, "ok.spec.ts"), join(project, "tests", "evil.spec.ts"));
+    const obs = await scanProject(project);
+    assert.deepEqual(obs.specs.map((s) => s.path), ["tests/ok.spec.ts"]);
+    assert.deepEqual(obs.refusedFiles, [{ path: "tests/evil.spec.ts", kind: "symlink-not-followed" }]);
+    assert.equal(obs.specs.some((s) => s.focusedTests.length > 0), false);
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("a file swapped for a symlink after the walk is refused at open time", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { rm, symlink } = await import("node:fs/promises");
+    const target = join(project, "tests", "ok.spec.ts");
+    const obs = await scanProject(project, {
+      beforeRead: async (rel) => {
+        if (rel !== "tests/ok.spec.ts") return;
+        await rm(target);
+        await symlink(join(outside, "ok.spec.ts"), target);
+      },
+    });
+    assert.deepEqual(obs.specs, []);
+    const kind = HAS_O_NOFOLLOW ? "final-symlink" : "outside-root";
+    assert.deepEqual(obs.refusedFiles, [{ path: "tests/ok.spec.ts", kind }]);
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("a parent directory swapped for a symlink after the walk is refused by containment", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { rename, symlink } = await import("node:fs/promises");
+    const tests = join(project, "tests");
+    const obs = await scanProject(project, {
+      beforeRead: async (rel) => {
+        if (rel !== "tests/ok.spec.ts") return;
+        await rename(tests, tests + "-moved");
+        await symlink(outside, tests); // tests/ok.spec.ts now names outside/ok.spec.ts
+      },
+    });
+    assert.deepEqual(obs.specs, []);
+    assert.deepEqual(obs.refusedFiles, [{ path: "tests/ok.spec.ts", kind: "outside-root" }]);
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("a sub-folder that is a symlink out of the project fails the whole tool", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { symlink } = await import("node:fs/promises");
+    await symlink(outside, join(project, "escape"));
+    const res = await runAudit({ path: "escape" }, project);
+    assert.equal(res.isError, true);
+    assert.match(res.content[0]!.text, /resolves outside the project directory/);
+    assert.doesNotMatch(res.content[0]!.text, /ESCAPED/);
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("a symlinked project root is resolved with realpath, and links inside it are still refused", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { symlink } = await import("node:fs/promises");
+    const linkedRoot = join(base, "linked-root");
+    await symlink(project, linkedRoot);
+    await symlink(join(outside, "ok.spec.ts"), join(project, "tests", "evil.spec.ts"));
+    const obs = await scanProject(linkedRoot);
+    assert.equal(obs.projectName, "project", "the real root, not the link name");
+    assert.deepEqual(obs.specs.map((s) => s.path), ["tests/ok.spec.ts"]);
+    assert.deepEqual(obs.refusedFiles, [{ path: "tests/evil.spec.ts", kind: "symlink-not-followed" }]);
+  } finally {
+    await cleanup(base);
+  }
 });

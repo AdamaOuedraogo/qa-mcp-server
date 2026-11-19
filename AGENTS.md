@@ -82,7 +82,7 @@ src/capabilities/test-suite-audit/
   scanner.ts              bounded, read-only project walk; facts only, no judgment
   rules.ts                the expertise: ~30 finding rules, axis scoring, hotspots, plan
   evaluator.ts            pure orchestration: auditTestSuite()
-  tool.ts                 audit_test_suite; path confined to QA_MCP_PROJECT_DIR (or cwd)
+  tool.ts                 audit_test_suite; refuses without QA_MCP_PROJECT_DIR, reads via openConfined()
   fixtures/sample-project a deliberately smelly Playwright project (excluded from tsc)
   tests/, docs/reasoning.md
 src/capabilities/test-strategy-assessment/
@@ -197,9 +197,13 @@ documentation updates.
 
 - `audit_test_suite` is static and read-only. It must never execute anything;
   keep the scanner free of process spawning and of network access.
-- The audited root is `QA_MCP_PROJECT_DIR` or `process.cwd()`; `path` must
-  stay inside it (`resolveInside()` in `tool.ts`). Preserve the `..`,
-  absolute-path and control-character rejections and the file/size caps.
+- The audited root is `QA_MCP_PROJECT_DIR`, with no working-directory
+  fallback: without it the tool refuses. `path` must stay inside it, lexically
+  (`resolveInside()` in `tool.ts`) and after `realpath` (`resolveScanRoot()`).
+  Every file is read through `openConfined()`. A root-level refusal fails the
+  whole call and is never a caveat; a per-file refusal goes in `refusedFiles`
+  and is stated in the output with its kind. Preserve the `..`, absolute-path
+  and control-character rejections and the file/size caps.
 - Credential redaction happens at the output boundary (`redact.ts`, applied in
   the evaluator to every snippet, path and note) so caller-supplied
   observations are covered too. Keep it there; add shapes rather than moving it.

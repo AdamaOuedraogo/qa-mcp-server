@@ -86,6 +86,25 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The refusal kinds that concern the root itself, not one file under it. */
+export const ROOT_REFUSALS = new Set<ConfinedRefusal["kind"]>(["root-unset", "root-not-absolute", "root-missing"]);
+
+/**
+ * Check the root alone: set, absolute, and resolvable with realpath. Returns
+ * the real root. `openConfined()` runs it after its path checks.
+ */
+export async function confineRoot(
+  root: string | undefined,
+): Promise<{ ok: true; realRoot: string } | { ok: false; refusal: ConfinedRefusal }> {
+  if (!root) return { ok: false, refusal: { kind: "root-unset" } };
+  if (!isAbsolute(root)) return { ok: false, refusal: { kind: "root-not-absolute" } };
+  try {
+    return { ok: true, realRoot: await realpath(root) };
+  } catch {
+    return { ok: false, refusal: { kind: "root-missing" } };
+  }
+}
+
 /**
  * Read at most `maxBytes` bytes of `rel`, a path relative to `root`.
  *
@@ -94,12 +113,18 @@ function messageOf(err: unknown): string {
  * @param rel       Path relative to `root`. Absolute paths and `..` segments
  *                  are refused; callers sanitize it first.
  * @param maxBytes  Upper bound on bytes read from disk.
+ * @param options   `fill`: repeat positional reads until `min(size, maxBytes)`
+ *                  bytes are in or the file ends, with a buffer of that size.
+ *                  Off by default: one read into a `maxBytes` buffer, which is
+ *                  what `read_test_report` does.
  */
 export async function openConfined(
   root: string | undefined,
   rel: string,
   maxBytes: number,
+  options: { fill?: boolean } = {},
 ): Promise<ConfinedRead> {
+  // Same order as before the extraction: root shape, then the path, then realpath.
   if (!root) return refused({ kind: "root-unset" });
   if (!isAbsolute(root)) return refused({ kind: "root-not-absolute" });
   if (isAbsolute(rel) || WINDOWS_ABSOLUTE.test(rel) || rel.startsWith("\\")) {
@@ -107,12 +132,9 @@ export async function openConfined(
   }
   if (rel.split(/[\\/]/).includes("..")) return refused({ kind: "traversal" });
 
-  let realRoot: string;
-  try {
-    realRoot = await realpath(root);
-  } catch {
-    return refused({ kind: "root-missing" });
-  }
+  const rootCheck = await confineRoot(root);
+  if (!rootCheck.ok) return rootCheck;
+  const realRoot = rootCheck.realRoot;
   const candidate = resolve(realRoot, rel);
 
   // Step 1: open first. With O_NOFOLLOW a symlink as the final component fails.
@@ -143,6 +165,16 @@ export async function openConfined(
     if (!sameFile(opened, resolved)) return refused({ kind: "identity-changed" });
 
     // Step 4: bounded read, from the descriptor that passed the checks.
+    if (options.fill) {
+      const buffer = Buffer.alloc(Math.max(0, Math.min(opened.size, maxBytes)));
+      let filled = 0;
+      while (filled < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, filled);
+        if (bytesRead === 0) break; // file shrank after stat
+        filled += bytesRead;
+      }
+      return { ok: true, realRoot, size: opened.size, bytes: buffer.subarray(0, filled) };
+    }
     const buffer = Buffer.alloc(maxBytes);
     const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
     return { ok: true, realRoot, size: opened.size, bytes: buffer.subarray(0, bytesRead) };

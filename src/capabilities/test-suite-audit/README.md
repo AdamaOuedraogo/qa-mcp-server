@@ -53,12 +53,18 @@ history (`triage_flaky_test` is the capability for that).
 ## Safety
 
 - **Read-only.** It opens files; it never runs a test or a command.
-- **Confined (lexically).** It scans `QA_MCP_PROJECT_DIR` when the operator
-  set it, else the server's working directory (like `read_test_report`). The
-  caller can narrow to a sub-folder; `..`, absolute paths, drive/UNC prefixes
-  and control characters are rejected outright, not cleaned. The walk does not
-  follow symlinks. This is a check on the requested path, not a filesystem
-  sandbox: a root that is itself a symlink, or a bind mount, is not detected.
+- **Confined.** It scans `QA_MCP_PROJECT_DIR` and refuses when the variable
+  is unset, not absolute or cannot be resolved; there is no working-directory
+  fallback. The caller can narrow to a sub-folder; `..`, absolute paths,
+  drive/UNC prefixes and control characters are rejected outright, not
+  cleaned, and a sub-folder that resolves outside the project is refused.
+  Each file is read through the same confined read as `read_test_report`
+  (`O_NOFOLLOW` open, `realpath` containment, device/inode match, bounded
+  read). The walk does not follow symlinks. A refused file is not analysed;
+  the output lists each one with its refusal kind and the summary states how
+  many there were. A root that is itself a symlink is resolved with
+  `realpath`, as `read_test_report` does. A hard link or a bind mount inside
+  the project is not detected; this is not a filesystem sandbox.
 - **Bounded.** Vendor/build directories skipped, at most 400 spec files by
   default and 512 KiB per file; every cap hit is listed in the judgment's
   `caveats` and reflected in `completeness`.

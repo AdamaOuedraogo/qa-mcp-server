@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, symlink, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HAS_O_NOFOLLOW, openConfined } from "./confinedRead.js";
+import { confineRoot, HAS_O_NOFOLLOW, openConfined } from "./confinedRead.js";
 
 let base: string;
 let root: string;
@@ -61,4 +61,23 @@ test("openConfined refuses a directory and a missing file", async () => {
 test("openConfined refuses a symbolic link as the final component", async () => {
   const expected = HAS_O_NOFOLLOW ? "final-symlink" : "outside-root";
   assert.equal(kind(await openConfined(root, "link.txt", 10)), expected);
+});
+
+test("openConfined with fill reads min(size, maxBytes) and the default stays a single bounded read", async () => {
+  const filled = await openConfined(root, "sub/a.txt", 4, { fill: true });
+  assert.ok(filled.ok);
+  assert.equal(filled.bytes.toString("utf8"), "0123");
+  const whole = await openConfined(root, "sub/a.txt", 1024, { fill: true });
+  assert.ok(whole.ok);
+  assert.equal(whole.bytes.length, 10, "buffer sized to the file, not to maxBytes");
+  const single = await openConfined(root, "sub/a.txt", 1024);
+  assert.ok(single.ok);
+  assert.equal(single.bytes.toString("utf8"), "0123456789");
+});
+
+test("confineRoot refuses an unset, relative or missing root and returns the real root", async () => {
+  assert.deepEqual(await confineRoot(undefined), { ok: false, refusal: { kind: "root-unset" } });
+  assert.deepEqual(await confineRoot("rel"), { ok: false, refusal: { kind: "root-not-absolute" } });
+  assert.deepEqual(await confineRoot(join(base, "nope")), { ok: false, refusal: { kind: "root-missing" } });
+  assert.deepEqual(await confineRoot(root), { ok: true, realRoot: root });
 });

@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getExecutionConfig } from "../../config.js";
 import { auditTestSuite } from "./evaluator.js";
-import { scanProject } from "./scanner.js";
+import { scanProject, ScanRootError } from "./scanner.js";
 import { TestSuiteObservationSchema, type TestSuiteAuditJudgment, type TestSuiteObservation } from "./schema.js";
 
 /**
@@ -15,9 +15,9 @@ import { TestSuiteObservationSchema, type TestSuiteAuditJudgment, type TestSuite
  * hotspot files to fix first, and a Diagnose → Prototype → Adopt action plan.
  *
  * Read-only by construction: it opens files, never runs anything. The audited
- * root is the operator's `QA_MCP_PROJECT_DIR` when set (falling back to the
- * server's working directory, like `read_test_report`). The caller may narrow
- * to a sub-directory but can never escape the root.
+ * root is the operator's `QA_MCP_PROJECT_DIR`; without it the scan is refused,
+ * like `read_test_report`. Every file is read through `openConfined()`. The
+ * caller may narrow to a sub-directory but can never escape the root.
  *
  * Two ways in: let the server scan (`path`), or hand it an observation the
  * agent assembled itself (`observation`) when the server has no filesystem
@@ -33,8 +33,9 @@ export function registerAuditTestSuite(server: McpServer): void {
         "maturity score per axis (reliability, maintainability, feedback speed, coverage & risk, " +
         "observability, governance), findings with file:line evidence, hotspot files to fix first, " +
         "and a Diagnose → Prototype → Adopt action plan. Static and read-only: it never executes tests. " +
-        "Scans QA_MCP_PROJECT_DIR (or the server's cwd); pass `path` to narrow to a sub-folder, or " +
-        "`observation` to audit a project the server cannot read.",
+        "Scans QA_MCP_PROJECT_DIR and refuses when it is unset; pass `path` to narrow to a sub-folder, or " +
+        "`observation` to audit a project the server cannot read. Files refused by the confined read " +
+        "(symbolic links, files outside the project) are listed with the reason and not analysed.",
       inputSchema: {
         path: z
           .string()
@@ -53,29 +54,56 @@ export function registerAuditTestSuite(server: McpServer): void {
         ),
       },
     },
-    async ({ path, maxSpecFiles, observation }) => {
-      try {
-        let obs: TestSuiteObservation;
-        let rootNote = "";
-        if (observation) {
-          obs = observation;
-          rootNote = "Source: observation supplied by the caller (no files read).";
-        } else {
-          const root = getExecutionConfig().projectDir ?? process.cwd();
-          const target = resolveInside(root, path);
-          if (!target) {
-            return refuse(`Refused: "${path}" is absolute or escapes the audited root. Use a relative sub-folder without '..'.`);
-          }
-          obs = await scanProject(target, { maxSpecFiles });
-          rootNote = `Audited root: ${target}`;
-        }
-        const judgment = auditTestSuite(obs);
-        return { content: [{ type: "text", text: render(judgment, rootNote) }] };
-      } catch (err) {
-        return refuse(`Audit failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
+    async (args) => runAudit(args),
   );
+}
+
+export interface AuditArgs {
+  path?: string;
+  maxSpecFiles?: number;
+  observation?: TestSuiteObservation;
+}
+
+/**
+ * The audit_test_suite handler. A root-level refusal (QA_MCP_PROJECT_DIR
+ * unset, not absolute, unresolvable, or a sub-folder outside it) fails the
+ * whole call; it is never turned into a caveat.
+ *
+ * @param projectDir  Project directory; defaults to the operator configuration.
+ */
+export interface AuditResult {
+  [key: string]: unknown;
+  isError?: true;
+  content: Array<{ type: "text"; text: string }>;
+}
+
+export async function runAudit(
+  { path, maxSpecFiles, observation }: AuditArgs,
+  projectDir: string | undefined = getExecutionConfig().projectDir,
+): Promise<AuditResult> {
+  try {
+    let obs: TestSuiteObservation;
+    let rootNote = "";
+    if (observation) {
+      obs = observation;
+      rootNote = "Source: observation supplied by the caller (no files read).";
+    } else {
+      // Lexical check first (no disk access); resolveScanRoot() then applies realpath containment.
+      const anchor = resolve("/");
+      const lexical = resolveInside(anchor, path);
+      if (!lexical) {
+        return refuse(`Refused: "${path}" is absolute or escapes the audited root. Use a relative sub-folder without '..'.`);
+      }
+      const subPath = relative(anchor, lexical) || undefined;
+      obs = await scanProject(projectDir, { maxSpecFiles, subPath });
+      rootNote = `Audited root: QA_MCP_PROJECT_DIR${subPath ? `, sub-folder ${subPath}` : ""}`;
+    }
+    const judgment = auditTestSuite(obs);
+    return { content: [{ type: "text" as const, text: render(judgment, rootNote, obs.refusedFiles) }] };
+  } catch (err) {
+    if (err instanceof ScanRootError) return refuse(`Refused: ${err.message}`);
+    return refuse(`Audit failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -109,7 +137,11 @@ function refuse(text: string) {
 const SEVERITY_ICON = { critical: "🟥", high: "🟧", medium: "🟨", low: "🟩" } as const;
 
 /** Render for humans; always append the machine-readable judgment for agents. */
-export function render(j: TestSuiteAuditJudgment, rootNote: string): string {
+export function render(
+  j: TestSuiteAuditJudgment,
+  rootNote: string,
+  refusedFiles: ReadonlyArray<{ path: string; kind: string }> = [],
+): string {
   const lines: string[] = [
     `# Test Suite Audit`,
     "",
@@ -119,6 +151,13 @@ export function render(j: TestSuiteAuditJudgment, rootNote: string): string {
     "",
     rootNote,
     "",
+    ...(refusedFiles.length
+      ? [
+          `**Refused files (${refusedFiles.length}):** not analysed; the findings below do not cover them.`,
+          ...refusedFiles.map((f) => `- \`${f.path}\` — ${f.kind}`),
+          "",
+        ]
+      : []),
     `**Scan completeness:** ${Math.round(j.completeness.score * 100)}% — ${j.completeness.specsAnalysed}/${j.completeness.specsFound} specs analysed, runner config ${j.completeness.runnerConfigFound ? "found" : "not found"}, CI ${j.completeness.ciDefinitionFound ? "found" : "not found"}, package.json ${j.completeness.packageJsonFound ? "found" : "not found"}.` +
       (j.completeness.notes.length ? ` Not judged: ${j.completeness.notes.join("; ")}.` : ""),
     "",

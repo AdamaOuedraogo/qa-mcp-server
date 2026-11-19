@@ -109,6 +109,10 @@ export const TestSuiteObservationSchema = z.object({
   ci: CiObservationSchema,
   repo: RepoObservationSchema,
   scanNotes: z.array(z.string()).describe("Scanner caveats: caps hit, files skipped, parse limits."),
+  refusedFiles: z
+    .array(z.object({ path: z.string(), kind: z.string() }))
+    .optional()
+    .describe("Files the confined read refused or the walk did not follow, with the refusal kind. Not analysed."),
 });
 export type TestSuiteObservation = z.infer<typeof TestSuiteObservationSchema>;
 

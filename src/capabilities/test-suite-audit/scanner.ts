@@ -1,5 +1,6 @@
-import { open, readdir, type FileHandle } from "node:fs/promises";
-import { join, relative, sep, basename, extname } from "node:path";
+import { readdir, realpath } from "node:fs/promises";
+import { join, relative, resolve, sep, basename, extname } from "node:path";
+import { confineRoot, openConfined, ROOT_REFUSALS, type ConfinedRefusal } from "../../utils/confinedRead.js";
 import type {
   CiObservation,
   Framework,
@@ -21,7 +22,32 @@ import type {
  * directories, caps the number of files it opens and the size of each, and
  * records every cap it hits in `scanNotes` so the audit can state what it
  * did not see. It never executes anything.
+ *
+ * Confined: the root is `QA_MCP_PROJECT_DIR`, resolved with realpath. Every
+ * file is read through `openConfined()` (O_NOFOLLOW, realpath containment,
+ * device/inode match, bounded read), the same path as `read_test_report`.
+ * A refusal about the root fails the whole scan ({@link ScanRootError}); a
+ * refusal about one file is recorded in `refusedFiles` and the file is skipped.
  */
+
+/** A refusal that concerns the audited root: the scan cannot run at all. */
+export class ScanRootError extends Error {
+  constructor(
+    readonly kind: ConfinedRefusal["kind"],
+    message: string,
+  ) {
+    super(message);
+    this.name = "ScanRootError";
+  }
+}
+
+/** Why one file was not analysed: a confined-read refusal, or a link the walk did not follow. */
+export type FileRefusalKind = ConfinedRefusal["kind"] | "symlink-not-followed";
+
+export interface RefusedFile {
+  path: string;
+  kind: FileRefusalKind;
+}
 
 export interface ScanOptions {
   /** Max spec files to open. Others are counted but not analysed. */
@@ -30,9 +56,16 @@ export interface ScanOptions {
   maxFileBytes?: number;
   /** Max occurrences kept per signal per file (evidence, not a census). */
   maxOccurrencesPerSignal?: number;
+  /** Sub-folder of the project root to audit (already checked by `resolveInside()`). */
+  subPath?: string;
+  /**
+   * Tests only, never set by the MCP tool: called before each file is opened,
+   * so a test can swap the file between the walk and the read.
+   */
+  beforeRead?: (path: string) => Promise<void> | void;
 }
 
-const DEFAULTS: Required<ScanOptions> = {
+const DEFAULTS = {
   maxSpecFiles: 400,
   maxFileBytes: 512 * 1024,
   maxOccurrencesPerSignal: 5,
@@ -335,7 +368,7 @@ interface Found {
   fixturesDir: boolean;
 }
 
-async function walk(root: string, maxFiles: number, notes: string[]): Promise<Found> {
+async function walk(root: string, maxFiles: number, notes: string[], refused: RefusedFile[]): Promise<Found> {
   const found: Found = {
     specs: [],
     features: [],
@@ -367,7 +400,10 @@ async function walk(root: string, maxFiles: number, notes: string[]): Promise<Fo
       }
       const abs = join(dir, e.name);
       const rel = relative(root, abs).split(sep).join("/");
-      if (e.isSymbolicLink()) continue;
+      if (e.isSymbolicLink()) {
+        refused.push({ path: rel, kind: "symlink-not-followed" });
+        continue;
+      }
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name) || SKIP_DIRS.has(rel)) continue;
         const lower = e.name.toLowerCase();
@@ -405,45 +441,86 @@ async function walk(root: string, maxFiles: number, notes: string[]): Promise<Fo
   return found;
 }
 
-/**
- * Read at most `maxBytes` bytes of a file as UTF-8. The buffer is sized to
- * `min(size, maxBytes)` and filled with positional reads, so memory use is
- * bounded by the cap, not by the file size. Exported for tests only; not
- * exposed over MCP.
- */
-export async function readCapped(abs: string, maxBytes: number, notes: string[], rel: string): Promise<string> {
-  let fh: FileHandle | undefined;
-  try {
-    fh = await open(abs, "r");
-    const st = await fh.stat();
-    if (!st.isFile()) throw new Error("not a regular file");
-    const size = st.size;
-    if (size > maxBytes) notes.push(`${rel}: truncated to ${maxBytes} bytes.`);
-    const buf = Buffer.alloc(Math.max(0, Math.min(size, maxBytes)));
-    let filled = 0;
-    while (filled < buf.length) {
-      const { bytesRead } = await fh.read(buf, filled, buf.length - filled, filled);
-      if (bytesRead === 0) break; // file shrank after stat
-      filled += bytesRead;
-    }
-    return buf.subarray(0, filled).toString("utf8");
-  } catch (err) {
-    notes.push(`${rel}: could not be read (${err instanceof Error ? err.message : String(err)}).`);
-    return "";
-  } finally {
-    await fh?.close().catch(() => undefined);
-  }
+const ROOT_MESSAGES: Partial<Record<ConfinedRefusal["kind"], string>> = {
+  "root-unset":
+    "audit_test_suite needs QA_MCP_PROJECT_DIR: it reads only inside that directory. " +
+    "Set it to the absolute path of the project to audit, or pass `observation` instead.",
+  "root-not-absolute": "QA_MCP_PROJECT_DIR must be an absolute path.",
+  "root-missing": "The project directory (QA_MCP_PROJECT_DIR) does not exist or cannot be resolved.",
+  "outside-root": "The audited sub-folder resolves outside the project directory (through a symbolic link).",
+  "open-failed": "The audited sub-folder does not exist or cannot be resolved.",
+};
+
+function rootError(kind: ConfinedRefusal["kind"]): ScanRootError {
+  return new ScanRootError(kind, ROOT_MESSAGES[kind] ?? `The audited root was refused (${kind}).`);
 }
 
 /**
- * Scan a project directory and return a bounded observation. Never throws for
- * unreadable files — it records a note instead, so a partial scan is still an
- * honest observation.
+ * Resolve the audited root: the project directory, then the optional
+ * sub-folder, both with realpath. Throws {@link ScanRootError} when the
+ * project directory is unset, not absolute or unresolvable, or when the
+ * sub-folder is missing or resolves outside the project directory.
  */
-export async function scanProject(root: string, options: ScanOptions = {}): Promise<TestSuiteObservation> {
+export async function resolveScanRoot(
+  projectDir: string | undefined,
+  subPath?: string,
+): Promise<{ realRoot: string; realTarget: string }> {
+  const root = await confineRoot(projectDir);
+  if (!root.ok) throw rootError(root.refusal.kind);
+  if (!subPath) return { realRoot: root.realRoot, realTarget: root.realRoot };
+  let realTarget: string;
+  try {
+    realTarget = await realpath(resolve(root.realRoot, subPath));
+  } catch {
+    throw rootError("open-failed");
+  }
+  if (realTarget !== root.realRoot && !realTarget.startsWith(root.realRoot + sep)) throw rootError("outside-root");
+  return { realRoot: root.realRoot, realTarget };
+}
+
+interface ReadContext {
+  realRoot: string;
+  realTarget: string;
+  maxBytes: number;
+  notes: string[];
+  refused: RefusedFile[];
+  beforeRead?: (path: string) => Promise<void> | void;
+}
+
+/**
+ * Read at most `ctx.maxBytes` bytes of `rel` (relative to the audited
+ * folder) as UTF-8, through `openConfined()` against the project root. A
+ * per-file refusal is recorded and returns "". A root-level refusal throws.
+ * Exported for tests only; not exposed over MCP.
+ */
+export async function readConfined(ctx: ReadContext, rel: string): Promise<string> {
+  await ctx.beforeRead?.(rel);
+  const fromRoot = relative(ctx.realRoot, join(ctx.realTarget, rel)).split(sep).join("/");
+  const r = await openConfined(ctx.realRoot, fromRoot, ctx.maxBytes, { fill: true });
+  if (!r.ok) {
+    if (ROOT_REFUSALS.has(r.refusal.kind)) throw rootError(r.refusal.kind);
+    ctx.refused.push({ path: rel, kind: r.refusal.kind });
+    return "";
+  }
+  if (r.size > ctx.maxBytes) ctx.notes.push(`${rel}: truncated to ${ctx.maxBytes} bytes.`);
+  return r.bytes.toString("utf8");
+}
+
+/**
+ * Scan the project directory (or `options.subPath` under it) and return a
+ * bounded observation. Throws {@link ScanRootError} when the root is refused.
+ * Never throws for one unreadable file: it records it in `refusedFiles`, so a
+ * partial scan is still an honest observation.
+ */
+export async function scanProject(projectDir: string | undefined, options: ScanOptions = {}): Promise<TestSuiteObservation> {
   const opt = { ...DEFAULTS, ...options };
   const notes: string[] = [];
-  const found = await walk(root, opt.maxSpecFiles, notes);
+  const refused: RefusedFile[] = [];
+  const { realRoot, realTarget } = await resolveScanRoot(projectDir, opt.subPath);
+  const root = realTarget;
+  const ctx: ReadContext = { realRoot, realTarget, maxBytes: opt.maxFileBytes, notes, refused, beforeRead: opt.beforeRead };
+  const read = (rel: string) => readConfined(ctx, rel);
+  const found = await walk(root, opt.maxSpecFiles, notes, refused);
 
   // Framework
   const hasPw = found.configs.some((c) => c.startsWith("playwright")) || found.specs.some((s) => /\.spec\.(ts|js)/.test(s) && !/cypress/.test(s));
@@ -453,14 +530,14 @@ export async function scanProject(root: string, options: ScanOptions = {}): Prom
   // Specs
   const specs: SpecObservation[] = [];
   for (const rel of found.specs.slice(0, opt.maxSpecFiles)) {
-    const src = await readCapped(join(root, rel), opt.maxFileBytes, notes, rel);
+    const src = await read(rel);
     if (src) specs.push(analyseSpec(rel, src, opt.maxOccurrencesPerSignal));
   }
   if (found.features.length) notes.push(`${found.features.length} Gherkin .feature files found (BDD layer) — step definitions were analysed as specs only if they match spec naming.`);
 
   // Runner config (prefer the file matching the dominant framework)
   const configRel = found.configs.find((c) => (framework === "cypress" ? c.startsWith("cypress") : c.startsWith("playwright"))) ?? found.configs[0];
-  const configSrc = configRel ? await readCapped(join(root, configRel), opt.maxFileBytes, notes, configRel) : "";
+  const configSrc = configRel ? await read(configRel) : "";
   const runnerConfig = analyseRunnerConfig(configRel, configSrc, framework);
   if (!configRel) notes.push("No playwright.config/cypress.config found at or below the audited root.");
   // storageState/session may live in specs/support rather than the config.
@@ -476,12 +553,12 @@ export async function scanProject(root: string, options: ScanOptions = {}): Prom
   // CI
   const ciFiles: Array<{ path: string; source: string }> = [];
   for (const rel of found.ciFiles.slice(0, 20)) {
-    ciFiles.push({ path: rel, source: await readCapped(join(root, rel), opt.maxFileBytes, notes, rel) });
+    ciFiles.push({ path: rel, source: await read(rel) });
   }
   const ci = analyseCi(ciFiles);
 
   // Repo
-  const pkgSrc = found.packageJson ? await readCapped(join(root, found.packageJson), opt.maxFileBytes, notes, found.packageJson) : "";
+  const pkgSrc = found.packageJson ? await read(found.packageJson) : "";
   let pkg: { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> } = {};
   try {
     pkg = pkgSrc ? JSON.parse(pkgSrc) : {};
@@ -490,8 +567,8 @@ export async function scanProject(root: string, options: ScanOptions = {}): Prom
   }
   const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
   const scripts = Object.entries(pkg.scripts ?? {});
-  const tsSrc = found.tsconfig ? await readCapped(join(root, found.tsconfig), opt.maxFileBytes, notes, found.tsconfig) : "";
-  const readmeTexts = await Promise.all(found.readmes.slice(0, 5).map((r) => readCapped(join(root, r), opt.maxFileBytes, notes, r)));
+  const tsSrc = found.tsconfig ? await read(found.tsconfig) : "";
+  const readmeTexts = await Promise.all(found.readmes.slice(0, 5).map((r) => read(r)));
   const repo: RepoObservation = {
     typescript: Boolean(found.tsconfig) || specs.some((s) => extname(s.path) === ".ts"),
     tsStrict: tsSrc ? /"strict"\s*:\s*true/.test(tsSrc) : undefined,
@@ -514,6 +591,14 @@ export async function scanProject(root: string, options: ScanOptions = {}): Prom
     runnerConfig,
     ci,
     repo,
-    scanNotes: notes,
+    scanNotes: refused.length
+      ? [
+          `${refused.length} file(s) refused and not analysed: ` +
+            refused.map((f) => `${f.path} (${f.kind})`).join(", ") +
+            ".",
+          ...notes,
+        ]
+      : notes,
+    ...(refused.length ? { refusedFiles: refused } : {}),
   };
 }
