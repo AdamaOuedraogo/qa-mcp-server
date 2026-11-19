@@ -33,6 +33,9 @@ const E2E_RUN_COMMAND = [
   /\buses:\s*cypress-io\/github-action/i,
 ];
 
+/** A line that holds one of the run commands above. */
+const E2E_LINE: Matcher = { test: (l: string) => E2E_RUN_COMMAND.some((re) => re.test(l)) };
+
 const GITLAB_RESERVED = new Set([
   "stages",
   "variables",
@@ -98,25 +101,107 @@ function child(b: Block, key: string): Block | undefined {
 
 const textOf = (b: Block | undefined): string => (b ? [b.inline, ...b.body].join("\n") : "");
 
-/** Split a block's sequence (`- a`, `- if: …\n  when: manual`) into its items. */
-function seqItems(b: Block | undefined): string[] {
-  if (!b) return [];
-  if (b.inline.startsWith("[")) return b.inline.replace(/^\[|\]$/g, "").split(",").map((s) => s.trim());
-  const items: string[] = [];
+/**
+ * How the whole file reads an inline value. Supported: an empty value (a
+ * block follows), a plain or quoted scalar, and a flow sequence of plain or
+ * quoted scalars (`[push, pull_request]`). Everything else is unsupported and
+ * makes the construct abstain: flow mappings `{…}`, nested flows, commas or
+ * brackets inside quotes, and aliases `*name`.
+ */
+type Inline =
+  | { kind: "empty" }
+  | { kind: "scalar"; value: string }
+  | { kind: "seq"; items: string[] }
+  | { kind: "unsupported"; why: string };
+
+export function readInline(raw: string): Inline {
+  const v = raw.trim().replace(/^&[\w-]+\s*/, ""); // an anchor on the value is fine
+  if (v === "") return { kind: "empty" };
+  if (v.startsWith("*")) return { kind: "unsupported", why: `YAML alias ${v.split(/\s/)[0]}` };
+  if (v.startsWith("{")) return { kind: "unsupported", why: "flow mapping {…}" };
+  if (v.startsWith("[")) {
+    if (!v.endsWith("]")) return { kind: "unsupported", why: "unterminated flow sequence" };
+    const inner = v.slice(1, -1);
+    const items: string[] = [];
+    let cur = "";
+    let quote: string | undefined;
+    for (const ch of inner) {
+      if (quote) {
+        if (ch === quote) quote = undefined;
+        else if (ch === "," || ch === "[" || ch === "]" || ch === "{" || ch === "}") {
+          return { kind: "unsupported", why: "flow sequence with a comma or bracket inside quotes" };
+        }
+        cur += ch;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+        cur += ch;
+      } else if (ch === "[" || ch === "]" || ch === "{" || ch === "}") {
+        return { kind: "unsupported", why: "nested flow collection" };
+      } else if (ch === ",") {
+        items.push(unquote(cur));
+        cur = "";
+      } else cur += ch;
+    }
+    if (quote) return { kind: "unsupported", why: "unterminated quote in a flow sequence" };
+    if (cur.trim() !== "" || items.length) items.push(unquote(cur));
+    return { kind: "seq", items: items.filter((x) => x !== "") };
+  }
+  return { kind: "scalar", value: unquote(v) };
+}
+
+/**
+ * The items of a block (`key:` followed by `- …` lines, or a supported flow
+ * sequence). Each item is either a scalar or a mapping read with blocksAt().
+ * Undefined when the value uses an unsupported form.
+ */
+type SeqItem = { scalar?: string; keys: Block[] };
+function seqOf(b: Block | undefined): { items: SeqItem[] } | { unsupported: string } {
+  if (!b) return { items: [] };
+  const inl = readInline(b.inline);
+  if (inl.kind === "unsupported") return { unsupported: inl.why };
+  if (inl.kind === "seq") return { items: inl.items.map((x) => ({ scalar: x, keys: [] })) };
+  if (inl.kind === "scalar") return { items: [{ scalar: inl.value, keys: [] }] };
+  const out: SeqItem[] = [];
   let ind: number | undefined;
+  let cur: string[] | undefined;
+  const flush = () => {
+    if (!cur || ind === undefined) return;
+    const first = cur[0]!.slice(ind + 2);
+    const keyed = /^(["']?)[^\s"'#-][^"']*?\1\s*:(\s|$)/.test(first);
+    out.push(keyed ? { keys: blocksAt(cur, ind + 2) } : { scalar: unquote(first), keys: [] });
+  };
   for (const l of b.body) {
     if (blank(l)) continue;
     const t = l.trimStart();
-    if (t.startsWith("- ") || t === "-") {
-      if (ind === undefined) ind = indentOf(l);
-      if (indentOf(l) === ind) {
-        items.push(t.slice(1).trim());
-        continue;
-      }
+    if (ind === undefined && (t.startsWith("- ") || t === "-")) ind = indentOf(l);
+    if (ind !== undefined && indentOf(l) === ind && (t.startsWith("- ") || t === "-")) {
+      flush();
+      cur = [" ".repeat(ind + 2) + t.slice(1).trimStart()];
+      continue;
     }
-    if (items.length) items[items.length - 1] += "\n" + t;
+    if (cur) cur.push(l);
+    else return { unsupported: "a mapping where a sequence was expected" };
   }
-  return items;
+  flush();
+  return { items: out };
+}
+
+const keyOf = (keys: Block[], k: string): Block | undefined => keys.find((x) => x.key === k);
+
+/** Absolute line range [start, end) of a direct child key of a top-level-or-nested block. */
+function childRange(b: Block, key: string, bodyOffset: number): { start: number; end: number } | undefined {
+  const ind = childIndent(b.body);
+  if (ind === undefined) return undefined;
+  const c = blocksAt(b.body, ind).find((x) => x.key === key);
+  return c ? { start: bodyOffset + c.start, end: bodyOffset + c.end } : undefined;
+}
+
+/** First line in [start, end) whose text matches `re`. */
+type Matcher = { test(line: string): boolean };
+function firstLine(lines: string[], range: { start: number; end: number } | undefined, re: Matcher): number | undefined {
+  if (!range) return undefined;
+  for (let i = range.start; i < range.end; i++) if (re.test(lines[i]!)) return i;
+  return undefined;
 }
 
 interface Job {
@@ -130,11 +215,17 @@ interface Job {
   start: number;
   end: number;
   disabled: boolean;
+  /** Whether the job can run at all is not established (and why). */
+  enabledUnknown?: string;
   manualOnly: boolean;
   /** Inherits from something this splitter does not follow. */
   inherits: boolean;
   mergeRequestGate: boolean | undefined;
   scheduled: boolean | undefined;
+  /** Why a value above was left undefined. */
+  why: Partial<Record<"mergeRequestGate" | "scheduled", string>>;
+  /** 0-based line of the construct behind each true value, inside the job. */
+  at: Partial<Record<"command" | "mergeRequestGate" | "scheduled" | Setting, number>>;
   settings: Record<Setting, boolean>;
 }
 
@@ -150,43 +241,191 @@ interface ParsedFile {
 
 // --- GitLab -------------------------------------------------------------------
 
-function gitlabRuleItem(item: string): { when: string; mr: boolean; schedule: boolean } {
+/**
+ * One GitLab rule, read structurally. This does not model GitLab's rule
+ * evaluator: it records only what decides a gate without evaluation.
+ */
+interface GitlabRule {
+  /** No `if`, no `changes`, no `exists`: the rule matches every pipeline. */
+  unconditional: boolean;
+  /** The source named by a plain `$CI_PIPELINE_SOURCE == "<source>"` test, else undefined. */
+  plainSource?: string;
+  restricted: boolean; // has changes: or exists:
+  when: string;
+  allowFailure: "true" | "false" | "other" | undefined;
+}
+
+const PLAIN_SOURCE = /^\$CI_PIPELINE_SOURCE\s*==\s*["']([a-z_]+)["']$/;
+
+function gitlabRule(item: SeqItem): GitlabRule | undefined {
+  if (item.scalar !== undefined) return undefined;
+  const ifB = keyOf(item.keys, "if");
+  const ifInl = ifB ? readInline(ifB.inline) : undefined;
+  if (ifB && (ifInl?.kind !== "scalar" || ifB.body.some((l) => !blank(l)))) return undefined;
+  const whenB = keyOf(item.keys, "when");
+  const whenInl = whenB ? readInline(whenB.inline) : undefined;
+  if (whenB && whenInl?.kind !== "scalar") return undefined;
+  const af = keyOf(item.keys, "allow_failure");
+  const afInl = af ? readInline(af.inline) : undefined;
+  const changes = Boolean(keyOf(item.keys, "changes"));
+  const exists = Boolean(keyOf(item.keys, "exists"));
+  const cond = ifInl?.kind === "scalar" ? ifInl.value : undefined;
   return {
-    when: /\bwhen\s*:\s*(\w+)/.exec(item)?.[1] ?? "on_success",
-    mr: /merge_request_event|CI_MERGE_REQUEST_/.test(item),
-    schedule: /["']schedule["']/.test(item),
+    unconditional: !ifB && !changes && !exists,
+    plainSource: cond !== undefined ? PLAIN_SOURCE.exec(cond)?.[1] : undefined,
+    restricted: changes || exists,
+    when: whenInl?.kind === "scalar" ? whenInl.value : "on_success",
+    allowFailure: !af ? undefined : afInl?.kind === "scalar" ? (afInl.value === "true" ? "true" : afInl.value === "false" ? "false" : "other") : "other",
   };
+}
+
+/**
+ * Decide a pipeline-source gate from a job's rules without evaluating them:
+ * only when exactly one rule can apply to pipelines of `source`, and that rule
+ * is a plain `$CI_PIPELINE_SOURCE == "<source>"` test with no changes/exists.
+ * A rule that tests another source plainly cannot apply; any other rule can.
+ * Rules after the first unconditional one are never reached.
+ */
+function gateFromRules(rules: GitlabRule[], source: string): { value?: boolean; why?: string } {
+  const candidates: GitlabRule[] = [];
+  for (const r of rules) {
+    if (r.plainSource !== undefined && r.plainSource !== source && !r.restricted) continue;
+    candidates.push(r);
+    if (r.unconditional) break;
+  }
+  if (candidates.length !== 1) {
+    return { why: `${candidates.length} rules can apply to ${source} pipelines; the outcome depends on rule evaluation, which is not modelled` };
+  }
+  const r = candidates[0]!;
+  if (r.plainSource !== source) return { why: `the rule that can apply to ${source} pipelines is not a plain $CI_PIPELINE_SOURCE == "${source}" test` };
+  if (r.restricted) return { why: `the ${source} rule is restricted by changes: or exists:` };
+  if (r.when === "never" || r.when === "manual") return { value: false };
+  if (r.allowFailure === "true") return { value: false };
+  if (r.allowFailure === "other") return { why: "the rule's allow_failure is not a plain boolean" };
+  return { value: true };
 }
 
 function parseGitlab(path: string, src: string): ParsedFile {
   const lines = stripYamlComments(src).split(/\r?\n/);
   const top = blocksAt(lines, 0);
+  const workflow = top.find((x) => x.key === "workflow");
+  const topWorkflowRules = workflow ? Boolean(child(workflow, "rules")) : false;
   const jobs: Job[] = [];
   for (const b of top) {
     if (GITLAB_RESERVED.has(b.key)) continue;
     const scripts = ["before_script", "script"].map((k) => textOf(child(b, k))).join("\n");
     const text = textOf(b);
-    const whenJob = unquote(child(b, "when")?.inline ?? "");
-    const allowFailure = /^true$/.test(unquote(child(b, "allow_failure")?.inline ?? ""));
-    const rules = seqItems(child(b, "rules")).map(gitlabRuleItem);
-    const only = textOf(child(b, "only"));
+    const why: Job["why"] = {};
+    const whenB = child(b, "when");
+    const whenInl = whenB ? readInline(whenB.inline) : undefined;
+    const whenJob = whenInl?.kind === "scalar" ? whenInl.value : "";
+    const afB = child(b, "allow_failure");
+    const afInl = afB ? readInline(afB.inline) : undefined;
+    const allowFailure: GitlabRule["allowFailure"] = !afB
+      ? undefined
+      : afInl?.kind === "scalar" && afB.body.every(blank)
+        ? afInl.value === "true"
+          ? "true"
+          : afInl.value === "false"
+            ? "false"
+            : "other"
+        : "other";
     const hidden = b.key.startsWith(".");
-    const disabled = hidden || whenJob === "never" || (rules.length > 0 && rules.every((r) => r.when === "never"));
-    const live = rules.filter((r) => r.when !== "never");
-    const manualOnly =
-      !disabled && (whenJob === "manual" || (rules.length > 0 && live.length > 0 && live.every((r) => r.when === "manual")));
+    const extendsB = child(b, "extends");
+    const inherits = Boolean(extendsB) || /<<\s*:|!reference/.test(text) || /:\s+\*[\w-]+\s*$/m.test(text);
+    const inheritWhy = extendsB
+      ? `the job uses extends: ${extendsB.inline || "(list)"}, which can set when, rules and allow_failure`
+      : /<<\s*:/.test(text)
+        ? "the job merges a YAML anchor (<<:)"
+        : /!reference/.test(text)
+          ? "the job uses !reference"
+          : "the job takes a value from a YAML alias (*name)";
+
+    const rulesB = child(b, "rules");
+    const rulesSeq = seqOf(rulesB);
+    let rules: GitlabRule[] | undefined;
+    let rulesWhy: string | undefined;
+    if ("unsupported" in rulesSeq) rulesWhy = `rules: uses an unsupported form (${rulesSeq.unsupported})`;
+    else {
+      const parsed = rulesSeq.items.map(gitlabRule);
+      if (parsed.some((r) => r === undefined)) rulesWhy = "a rule uses an unsupported form";
+      else rules = parsed as GitlabRule[];
+    }
+    const onlyB = child(b, "only");
+    const exceptB = child(b, "except");
+
+    let disabled = hidden || whenJob === "never";
+    let manualOnly = whenJob === "manual";
+    let enabledUnknown: string | undefined;
+    if (rules && rules.length) {
+      const first = rules[0]!;
+      if (first.unconditional) {
+        // The first rule matches every pipeline; later rules are never reached.
+        disabled = disabled || first.when === "never";
+        manualOnly = manualOnly || first.when === "manual";
+      } else {
+        disabled = disabled || rules.every((r) => r.when === "never");
+        const live = rules.filter((r) => r.when !== "never");
+        manualOnly = manualOnly || (live.length > 0 && live.every((r) => r.when === "manual"));
+      }
+    }
+    if (!disabled && inherits) enabledUnknown = inheritWhy;
+    else if (!disabled && rulesWhy) enabledUnknown = rulesWhy;
+    else if (!disabled && whenB && whenInl?.kind !== "scalar") enabledUnknown = "when: uses an unsupported form";
+    if (enabledUnknown) manualOnly = false;
 
     let mergeRequestGate: boolean | undefined;
-    const mrRule = rules.find((r) => r.mr);
-    if (manualOnly || allowFailure) mergeRequestGate = false;
-    else if (mrRule) mergeRequestGate = mrRule.when !== "manual" && mrRule.when !== "never";
-    else if (/\bmerge_requests\b/.test(only)) mergeRequestGate = true;
-
     let scheduled: boolean | undefined;
-    const schedRule = rules.find((r) => r.schedule);
-    if (schedRule) scheduled = schedRule.when !== "never" && schedRule.when !== "manual";
-    else if (/\bschedules\b/.test(only)) scheduled = true;
+    if (enabledUnknown) {
+      why.mergeRequestGate = why.scheduled = enabledUnknown;
+    } else if (manualOnly || allowFailure === "true") {
+      mergeRequestGate = false;
+    } else if (allowFailure === "other") {
+      why.mergeRequestGate = "allow_failure is not a plain boolean (exit_codes or a mapping)";
+    } else if (topWorkflowRules) {
+      why.mergeRequestGate = "the file has workflow: rules, which decide whether merge-request pipelines exist; they are not modelled";
+    } else if (rules && rules.length) {
+      const g = gateFromRules(rules, "merge_request_event");
+      mergeRequestGate = g.value;
+      if (g.why) why.mergeRequestGate = g.why;
+    } else if (onlyB || exceptB) {
+      const onlySeq = seqOf(onlyB);
+      if (exceptB) why.mergeRequestGate = "except: is not modelled";
+      else if ("unsupported" in onlySeq || onlySeq.items.some((i) => i.scalar === undefined)) {
+        why.mergeRequestGate = "only: uses refs/variables/changes or an unsupported form";
+      } else mergeRequestGate = onlySeq.items.some((i) => i.scalar === "merge_requests") ? true : undefined;
+      if (mergeRequestGate === undefined && !why.mergeRequestGate) why.mergeRequestGate = "only: does not list merge_requests";
+    } else {
+      why.mergeRequestGate = "the job has no rules or only:; whether it runs in merge-request pipelines depends on settings outside the file";
+    }
 
+    if (!enabledUnknown) {
+      if (rules && rules.length) {
+        const g = gateFromRules(rules, "schedule");
+        scheduled = g.value === undefined ? undefined : g.value;
+        if (g.why) why.scheduled = g.why;
+      } else if (onlyB && !exceptB) {
+        const onlySeq = seqOf(onlyB);
+        if (!("unsupported" in onlySeq) && onlySeq.items.some((i) => i.scalar === "schedules")) scheduled = true;
+        else why.scheduled = "only: does not list schedules";
+      } else {
+        why.scheduled = "GitLab schedules are configured outside the YAML";
+      }
+    }
+
+    const at: Job["at"] = {};
+    const off = b.start + 1;
+    for (const k of ["script", "before_script"]) {
+      at.command ??= firstLine(lines, childRange(b, k, off), E2E_LINE);
+    }
+    if (mergeRequestGate) {
+      at.mergeRequestGate = rules?.length
+        ? firstLine(lines, childRange(b, "rules", off), /merge_request_event/)
+        : firstLine(lines, childRange(b, "only", off), /merge_requests/);
+    }
+    if (scheduled) {
+      at.scheduled = rules?.length ? firstLine(lines, childRange(b, "rules", off), /["']schedule["']/) : firstLine(lines, childRange(b, "only", off), /schedules/);
+    }
     const retryBlock = child(b, "retry");
     const retryText = textOf(retryBlock);
     jobs.push({
@@ -197,10 +436,13 @@ function parseGitlab(path: string, src: string): ParsedFile {
       start: b.start,
       end: b.end,
       disabled,
+      enabledUnknown,
       manualOnly,
-      inherits: Boolean(child(b, "extends")) || /<<\s*:|!reference/.test(text),
+      inherits,
       mergeRequestGate,
       scheduled,
+      why,
+      at,
       settings: {
         artifacts: Boolean(child(b, "artifacts")),
         junit: /^\s*junit\s*:/m.test(textOf(child(b, "artifacts"))),
@@ -282,6 +524,8 @@ function parseGithub(path: string, src: string): ParsedFile {
         inherits: reusable || /uses\s*:\s*\.\//.test(text),
         mergeRequestGate,
         scheduled,
+        why: {},
+        at: { command: firstLine(lines, { start: offset + b.start, end: offset + b.end }, E2E_LINE) },
         settings: {
           artifacts: /uses\s*:\s*actions\/upload-artifact/.test(text),
           junit: /junit/i.test(text),
@@ -311,6 +555,31 @@ function settingFor(job: Job, file: ParsedFile, s: Setting): boolean | undefined
   if (job.inherits) return undefined;
   const elsewhere = [...file.lines.slice(0, job.start), ...file.lines.slice(job.end)].join("\n");
   return SETTING_ELSEWHERE[s].test(elsewhere) ? undefined : false;
+}
+
+/** For every true value, the file, job and 1-based line that carries it. */
+function evidenceOf(jobs: Job[]): { evidence?: Record<string, { file: string; job: string; line: number }> } {
+  const ev: Record<string, { file: string; job: string; line: number }> = {};
+  const put = (field: string, key: keyof Job["at"], pick: (j: Job) => boolean) => {
+    const j = jobs.find((x) => pick(x) && x.at[key] !== undefined);
+    if (j) ev[field] = { file: j.file, job: j.name, line: j.at[key]! + 1 };
+  };
+  put("e2eJobPresent", "command", () => true);
+  put("runsOnMergeRequest", "mergeRequestGate", (j) => j.mergeRequestGate === true);
+  put("scheduledRun", "scheduled", (j) => j.scheduled === true);
+  return Object.keys(ev).length ? { evidence: ev } : {};
+}
+
+/** The first reason given for each gate left undefined across the E2E jobs. */
+function reasonsOf(jobs: Job[]): { reasons?: Record<string, string> } {
+  const reasons: Record<string, string> = {};
+  const gate = anyOf(jobs.map((j) => j.mergeRequestGate));
+  const sched = anyOf(jobs.map((j) => j.scheduled));
+  const mr = jobs.find((j) => j.why.mergeRequestGate)?.why.mergeRequestGate;
+  const sc = jobs.find((j) => j.why.scheduled)?.why.scheduled;
+  if (gate === undefined && mr) reasons.runsOnMergeRequest = mr;
+  if (sched === undefined && sc) reasons.scheduledRun = sc;
+  return Object.keys(reasons).length ? { reasons } : {};
 }
 
 /** Any true → true; all false → false; otherwise not established. */
@@ -352,13 +621,23 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
   const parsed = files.map((f) => (f.path.includes(".github/workflows") ? parseGithub(f.path, f.source) : parseGitlab(f.path, f.source)));
 
   const e2e: Array<{ job: Job; file: ParsedFile }> = [];
+  let unknownJob: Job | undefined;
   for (const file of parsed) {
     for (const job of file.jobs) {
-      if (!job.disabled && E2E_RUN_COMMAND.some((re) => re.test(job.commands))) e2e.push({ job, file });
+      if (job.disabled || !E2E_RUN_COMMAND.some((re) => re.test(job.commands))) continue;
+      if (job.enabledUnknown) unknownJob ??= job;
+      else e2e.push({ job, file });
     }
   }
   const base = { provider, files: files.map((f) => f.path) } as const;
 
+  if (e2e.length === 0 && unknownJob) {
+    return {
+      ...base,
+      e2eJobPresent: false,
+      e2eJobNotEstablished: `job ${unknownJob.name} in ${unknownJob.file} runs an E2E command, but whether it runs is not established: ${unknownJob.enabledUnknown}`,
+    };
+  }
   if (e2e.length === 0) {
     const textHit = parsed.find((p) => E2E_RUN_COMMAND.some((re) => re.test(p.lines.join("\n"))));
     const inherits = parsed.find((p) => p.includesOthers || p.jobs.some((j) => j.inherits && !j.disabled));
@@ -377,6 +656,8 @@ export function analyseCi(files: Array<{ path: string; source: string }>): CiObs
     e2eJobs: e2e.map(({ job }) => ({ file: job.file, job: job.name, manualOnly: job.manualOnly })),
     runsOnMergeRequest: anyOf(e2e.map(({ job }) => job.mergeRequestGate)),
     scheduledRun: anyOf(e2e.map(({ job }) => job.scheduled)),
+    ...reasonsOf(e2e.map(({ job }) => job)),
+    ...evidenceOf(e2e.map(({ job }) => job)),
     artifactsPublished: per("artifacts"),
     junitReportWired: per("junit"),
     parallelOrSharded: per("parallel"),

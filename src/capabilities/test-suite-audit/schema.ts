@@ -102,6 +102,14 @@ export const CiObservationSchema = z.object({
   parallelOrSharded: z.boolean().optional().describe("The E2E job is parallel, sharded or a matrix."),
   blanketJobRetry: z.boolean().optional().describe("The E2E job is retried as a whole (masks flake)."),
   dependencyCache: z.boolean().optional().describe("The E2E job caches dependencies."),
+  evidence: z
+    .record(z.object({ file: z.string(), job: z.string(), line: z.number().int().positive() }))
+    .optional()
+    .describe("For each true value: the CI file, job and line that carries it."),
+  reasons: z
+    .record(z.string())
+    .optional()
+    .describe("For a setting above left undefined: why it is not established."),
 });
 export type CiObservation = z.infer<typeof CiObservationSchema>;
 

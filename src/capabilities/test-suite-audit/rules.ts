@@ -567,7 +567,7 @@ const noCiGate: Rule = (obs) => {
       observation:
         basis === "observed"
           ? "The workflow that runs the E2E job has no schedule trigger."
-          : "The E2E job has no rule that names a scheduled pipeline. GitLab schedules are configured outside the YAML, so whether one exists is not established.",
+          : `Whether the E2E job runs on a schedule is not established${obs.ci.reasons?.scheduledRun ? `: ${obs.ci.reasons.scheduledRun}` : ""}.`,
       impact: "Environment drift and slow flake go unnoticed between merges; the full suite is only run under release pressure.",
       recommendation: "Schedule a nightly full run against staging and review its trend weekly.",
       effort: "S",

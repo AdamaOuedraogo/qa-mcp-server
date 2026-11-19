@@ -128,6 +128,22 @@ inherited through `extends:`/`<<:`/`!reference`/a local action, it is *not
 established* (`undefined`) and the rule reports `not_observed`. It is `false`,
 an observed absence, only when it appears nowhere in the file.
 
+GitLab rules are read, not evaluated. A rule is *unconditional* when it has
+no `if`, no `changes` and no `exists`; an unconditional first rule decides
+every pipeline (`when: never` disables the job, `when: manual` makes it
+manual-only) and later rules are never reached. The merge-request gate (and
+likewise the schedule) is decided only when exactly one rule can apply to
+merge-request pipelines and its condition is a plain
+`$CI_PIPELINE_SOURCE == "merge_request_event"` test without `changes`/`exists`:
+`when: never`/`manual` or a rule-level `allow_failure: true` gives `false`,
+otherwise `true`. A rule that tests another source plainly cannot apply; any
+other rule can. Anything else (several candidate rules, negations, other
+variables, `changes`, `workflow: rules`, `except:`, a non-boolean
+`allow_failure`) leaves the gate undefined, with the reason in `ci.reasons`.
+A job that uses `extends`, a merge key, `!reference` or an alias, or whose
+`rules`/`when` use an unsupported form, has an unknown enabled state: it does
+not establish an E2E job, and the reason names the construct.
+
 Gates: a disabled job (`when: never`, `if: false`, a hidden `.template`) is
 not an E2E job. A manual-only job (`when: manual`, a GitHub workflow with only
 `workflow_dispatch`) or one allowed to fail (`allow_failure`,
