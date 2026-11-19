@@ -1,7 +1,7 @@
 import { readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep, basename, extname } from "node:path";
 import { confineRoot, openConfined, ROOT_REFUSALS, type ConfinedRefusal } from "../../utils/confinedRead.js";
-import { analyseCi } from "./ci.js";
+import { analyseCi, withUnreadCiFiles } from "./ci.js";
 import type {
   CiObservation,
   Framework,
@@ -497,9 +497,15 @@ export async function scanProject(projectDir: string | undefined, options: ScanO
 
   // Runner config (prefer the file matching the dominant framework)
   const configRel = found.configs.find((c) => (framework === "cypress" ? c.startsWith("cypress") : c.startsWith("playwright"))) ?? found.configs[0];
+  const refusalOf = (rel: string) => refused.find((f) => f.path === rel);
   const configSrc = configRel ? await read(configRel) : "";
-  const runnerConfig = analyseRunnerConfig(configRel, configSrc, framework);
-  if (!configRel) notes.push("No playwright.config/cypress.config found at or below the audited root.");
+  // A config that was found but refused must not reach the rules as present.
+  const configRefusal = configRel ? refusalOf(configRel) : undefined;
+  const runnerConfig = analyseRunnerConfig(configRefusal ? undefined : configRel, configRefusal ? "" : configSrc, framework);
+  if (configRefusal) {
+    runnerConfig.configNotRead = { path: configRefusal.path, kind: configRefusal.kind };
+    notes.push(`${configRefusal.path} was found but not read (${configRefusal.kind}); runner settings are not observed.`);
+  } else if (!configRel) notes.push("No playwright.config/cypress.config found at or below the audited root.");
   // storageState/session may live in specs/support rather than the config.
   if (!runnerConfig.storageStateOrSession) {
     for (const rel of found.specs.slice(0, opt.maxSpecFiles)) {
@@ -512,10 +518,15 @@ export async function scanProject(projectDir: string | undefined, options: ScanO
 
   // CI
   const ciFiles: Array<{ path: string; source: string }> = [];
-  for (const rel of found.ciFiles.slice(0, 20)) {
-    ciFiles.push({ path: rel, source: await read(rel) });
+  const ciUnread: RefusedFile[] = [];
+  const ciPaths = found.ciFiles.slice(0, 20);
+  for (const rel of ciPaths) {
+    const source = await read(rel);
+    const r = refusalOf(rel);
+    if (r) ciUnread.push(r);
+    else ciFiles.push({ path: rel, source });
   }
-  const ci = analyseCi(ciFiles);
+  const ci = withUnreadCiFiles(analyseCi(ciFiles), ciPaths, ciUnread);
 
   // Repo
   const pkgSrc = found.packageJson ? await read(found.packageJson) : "";

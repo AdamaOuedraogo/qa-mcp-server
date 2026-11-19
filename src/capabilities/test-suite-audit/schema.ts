@@ -54,7 +54,11 @@ export type SpecObservation = z.infer<typeof SpecObservationSchema>;
 
 /** Values read from playwright.config / cypress.config. Unknown means not found. */
 export const RunnerConfigObservationSchema = z.object({
-  configFile: z.string().optional(),
+  configFile: z.string().optional().describe("The runner config that was found *and read*."),
+  configNotRead: z
+    .object({ path: z.string(), kind: z.string() })
+    .optional()
+    .describe("A runner config that was found but refused by the confined read; its settings are not observed."),
   retries: z.number().int().nonnegative().optional(),
   workers: z.union([z.number().int().positive(), z.string()]).optional(),
   workersInCi: z.number().int().positive().optional().describe("Workers when CI is set, from `workers: process.env.CI ? N : …`."),

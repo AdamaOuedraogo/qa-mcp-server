@@ -320,13 +320,35 @@ function anyOf(values: Array<boolean | undefined>): boolean | undefined {
   return undefined;
 }
 
+/** The CI provider named by a set of CI file paths. */
+export function ciProvider(paths: string[]): CiObservation["provider"] {
+  if (paths.length === 0) return "none";
+  if (paths.some((p) => basename(p) === ".gitlab-ci.yml")) return "gitlab";
+  if (paths.some((p) => p.includes(".github/workflows"))) return "github";
+  return "other";
+}
+
+/**
+ * Downgrade a CI observation when some CI files were found but not read: an
+ * observed absence (`false`) is no longer established, since the unread file
+ * may hold the setting or the E2E job itself.
+ */
+export function withUnreadCiFiles(ci: CiObservation, allPaths: string[], unread: Array<{ path: string; kind: string }>): CiObservation {
+  if (unread.length === 0) return ci;
+  const list = unread.map((u) => `${u.path} (${u.kind})`).join(", ");
+  const out: CiObservation = { ...ci, provider: ciProvider(allPaths), files: allPaths };
+  for (const k of ["runsOnMergeRequest", "scheduledRun", "artifactsPublished", "junitReportWired", "parallelOrSharded", "blanketJobRetry", "dependencyCache"] as const) {
+    if (out[k] === false) delete out[k];
+  }
+  if (!out.e2eJobPresent) out.e2eJobNotEstablished = `CI file(s) not read: ${list}`;
+  return out;
+}
+
 export function analyseCi(files: Array<{ path: string; source: string }>): CiObservation {
   if (files.length === 0) {
     return { provider: "none", files: [], e2eJobPresent: false };
   }
-  const gitlab = files.some((f) => basename(f.path) === ".gitlab-ci.yml");
-  const github = files.some((f) => f.path.includes(".github/workflows"));
-  const provider = gitlab ? "gitlab" : github ? "github" : "other";
+  const provider = ciProvider(files.map((f) => f.path));
   const parsed = files.map((f) => (f.path.includes(".github/workflows") ? parseGithub(f.path, f.source) : parseGitlab(f.path, f.source)));
 
   const e2e: Array<{ job: Job; file: ParsedFile }> = [];

@@ -899,3 +899,59 @@ test("CI rules report a not-established setting as not observed, never as observ
   assert.equal(notEstablished.get("COV-005")?.basis, "not_observed");
   assert.match(notEstablished.get("COV-005")!.title, /could be confirmed/);
 });
+
+// --- Unread config never reaches the rules as present -------------------------
+
+async function swapForSymlink(project: string, outside: string, rel: string, content: string) {
+  const { rm, symlink, writeFile } = await import("node:fs/promises");
+  const target = join(outside, rel.replace(/\//g, "_"));
+  await writeFile(target, content);
+  await rm(join(project, rel));
+  await symlink(target, join(project, rel));
+}
+
+test("a runner config swapped for a symlink is refused and judged not observed, not present", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    // Readable, this config would satisfy OBS-001 (json reporter) and trip REL-004 (retries: 3).
+    await writeFile(join(project, "playwright.config.ts"), `export default defineConfig({ retries: 3, reporter: [["json"]] });\n`);
+    const obs = await scanProject(project, {
+      beforeRead: (rel) =>
+        rel === "playwright.config.ts" ? swapForSymlink(project, outside, rel, `export default defineConfig({ reporter: "html" });\n`) : undefined,
+    });
+    assert.equal(obs.runnerConfig.configFile, undefined, "refused, so not present");
+    assert.deepEqual(obs.runnerConfig.configNotRead, { path: "playwright.config.ts", kind: HAS_O_NOFOLLOW ? "final-symlink" : "outside-root" });
+    assert.ok(obs.refusedFiles?.some((f) => f.path === "playwright.config.ts"));
+
+    const j = auditTestSuite(obs);
+    const ids = j.findings.map((f) => f.id);
+    for (const silent of ["OBS-001", "OBS-002", "REL-004", "SPD-001"]) assert.ok(!ids.includes(silent), `${silent} must stay silent`);
+    const cfg = j.findings.find((f) => f.id === "CFG-001");
+    assert.equal(cfg?.basis, "not_observed");
+    assert.equal(cfg?.title, "Runner configuration could not be read");
+    assert.equal(j.completeness.runnerConfigFound, false);
+    assert.ok(j.completeness.notes.some((n) => /playwright\.config\.ts found but not read/.test(n)));
+    assert.ok(j.completeness.notes.some((n) => /refused by the confined read/.test(n)));
+  } finally {
+    await cleanup(base);
+  }
+});
+
+test("a CI file swapped for a symlink is left out, and the E2E job's absence is not established", async () => {
+  const { base, project, outside } = await tempProject();
+  try {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(join(project, ".gitlab-ci.yml"), `e2e:\n  script: [npx playwright test]\n`);
+    const obs = await scanProject(project, {
+      beforeRead: (rel) => (rel === ".gitlab-ci.yml" ? swapForSymlink(project, outside, rel, `lint:\n  script: [npm run lint]\n`) : undefined),
+    });
+    assert.equal(obs.ci.provider, "gitlab");
+    assert.equal(obs.ci.e2eJobPresent, false);
+    assert.match(obs.ci.e2eJobNotEstablished ?? "", /CI file\(s\) not read: \.gitlab-ci\.yml/);
+    const cov005 = auditTestSuite(obs).findings.find((f) => f.id === "COV-005");
+    assert.equal(cov005?.basis, "not_observed", "never 'observed: no CI job runs the suite'");
+  } finally {
+    await cleanup(base);
+  }
+});

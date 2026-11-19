@@ -726,8 +726,10 @@ const noRunnerConfig: Rule = (obs) => {
     id: "CFG-001",
     axis: "observability",
     severity: "medium",
-    title: "Runner configuration not found at the audited root",
-    observation: `${obs.specs.length} spec file(s) found but no playwright.config/cypress.config at or below the root.`,
+    title: obs.runnerConfig.configNotRead ? "Runner configuration could not be read" : "Runner configuration not found at the audited root",
+    observation: obs.runnerConfig.configNotRead
+      ? `${obs.specs.length} spec file(s) found; ${obs.runnerConfig.configNotRead.path} exists but the confined read refused it (${obs.runnerConfig.configNotRead.kind}), so its settings are not observed.`
+      : `${obs.specs.length} spec file(s) found but no playwright.config/cypress.config at or below the root.`,
     impact: "Retries, reporters, traces and parallelism could not be judged. They may be configured elsewhere (a parent directory, a shared package) or not at all.",
     recommendation: "Point the audit at the directory that holds the test config, or confirm with the team where the runner is configured.",
     effort: "S",

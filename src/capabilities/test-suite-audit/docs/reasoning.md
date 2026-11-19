@@ -27,7 +27,10 @@ we trust this suite, what is costing us the most, and what should we do first?**
    `basis: not_observed`, weigh half in scoring, never trigger the critical
    cap, and are summarised in `completeness`. Rules that need the config
    (reporters, traces, retries, parallelism) do not fire when it was not
-   found; `CFG-001` reports the gap instead.
+   found; `CFG-001` reports the gap instead. A config that was found but
+   refused by the confined read is treated the same way: it is not present
+   (`configNotRead` records the path and the refusal kind), and a refused CI
+   file turns an observed absence into "not established".
 6. **Heuristics are labelled.** Assertion detection is line-based and
    name-based (inline `expect/should/assert`, helpers named `verify…`,
    `assert…`, `check…`); `COV-004` says "visible assertion", is medium at
@@ -94,7 +97,7 @@ not claim a measured run time.
 
 | Rule | Flags | Severity logic |
 | --- | --- | --- |
-| CFG-001 | specs found but no runner config at the root (`not_observed`) | medium — and OBS-001/002, REL-004, SPD-001 stay silent |
+| CFG-001 | specs found but no runner config at the root, or one that was found but not read (`not_observed`) | medium — and OBS-001/002, REL-004, SPD-001 stay silent |
 | OBS-001 | no JSON/JUnit/Allure/Mochawesome reporter | high — without it there is no trend and nothing for AI-assisted triage |
 | OBS-002 | trace/screenshot off (or nothing configured on Playwright) | medium |
 | OBS-003 | E2E job publishes no artifacts | medium (`not_observed` when not established) |

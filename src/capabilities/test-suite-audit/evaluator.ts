@@ -98,11 +98,14 @@ function computeCompleteness(obs: TestSuiteObservation): TestSuiteAuditJudgment[
   const packageJsonFound = Boolean(obs.repo.packageJsonFound);
   const specsFound = obs.totalSpecFilesFound;
   const specsAnalysed = obs.specs.length;
-  if (!runnerConfigFound) notes.push("runner config not found (retries, reporters, traces, parallelism not judged)");
+  if (obs.runnerConfig.configNotRead) {
+    notes.push(`runner config ${obs.runnerConfig.configNotRead.path} found but not read (${obs.runnerConfig.configNotRead.kind}; retries, reporters, traces, parallelism not judged)`);
+  } else if (!runnerConfigFound) notes.push("runner config not found (retries, reporters, traces, parallelism not judged)");
   if (!ciDefinitionFound) notes.push("no CI definition found (gate, artifacts, sharding not judged)");
   if (!packageJsonFound) notes.push("package.json not found or unparsable (scripts, dependencies not judged)");
   if (specsFound > specsAnalysed) notes.push(`${specsFound - specsAnalysed} spec file(s) counted but not analysed`);
   if (specsFound === 0) notes.push("no spec files found");
+  if (obs.refusedFiles?.length) notes.push(`${obs.refusedFiles.length} file(s) refused by the confined read`);
   const specShare = specsFound === 0 ? 0 : specsAnalysed / specsFound;
   const score = Math.round(((specShare * 2 + (runnerConfigFound ? 1 : 0) + (ciDefinitionFound ? 1 : 0) + (packageJsonFound ? 1 : 0)) / 5) * 100) / 100;
   return { score, specsAnalysed, specsFound, runnerConfigFound, ciDefinitionFound, packageJsonFound, notes };
