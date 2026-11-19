@@ -29,7 +29,7 @@ found: gh at /usr/bin/gh
 - opening a symbolic link with `O_RDONLY | O_NOFOLLOW` on Linux fails with error code `ELOOP`, which `readReport()` maps to its final-component refusal; the test that asserts that message passes here · source: src/tools/readTestReport.test.ts:80 · how: ran
 - the audit scanner's `readCapped()` sizes its buffer to `min(size, maxBytes)` and fills it with positional reads, so it reads at most the per-file cap (issue #5) · source: src/capabilities/test-suite-audit/scanner.ts:422 · how: read
 - the existing `src/capabilities/*/tests/*.test.ts` pattern in the test script already picks up both audit test files: 20 tests in `test-suite-audit`, 5 in `test-strategy-assessment` · source: package.json:35 · how: ran
-- after rebasing the audit capabilities onto the boundary-hardening merge, `pnpm test` runs 88 tests (63 before), all passing · source: package.json:35 · how: ran
+- the audit capabilities rebased onto the boundary-hardening merge pass the full `pnpm test` suite with no test changes; the count grows with each later commit, so run the suite rather than rely on a number here · source: package.json:35 · how: ran
 
 ## Receipts
 command: pnpm test (first run, before the test expectation was corrected; excerpt)
