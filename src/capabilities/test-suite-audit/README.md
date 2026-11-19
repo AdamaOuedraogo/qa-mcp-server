@@ -90,6 +90,63 @@ history (`triage_flaky_test` is the capability for that).
   delimiters with a per-call token, so a quoted line cannot forge the closing
   line. This is best-effort labelling, not a security boundary.
 
+## CI files: what is read
+
+The CI analysis (`ci.ts`) has no YAML parser. It reads the constructs below
+and gives a definite answer for them; anything else abstains: the value is
+left undefined with a reason in `ci.reasons` or `ci.e2eJobNotEstablished`,
+and the finding is `not_observed`. The rules are in
+[docs/reasoning.md](docs/reasoning.md#ci-detection).
+
+**Read (definite answers)**
+
+- Block mappings and block sequences split by indentation; `#` comments
+  outside quotes.
+- Flow forms, the same rule for the whole file: a plain or quoted scalar, and
+  a flow sequence of plain or quoted scalars (`[push, pull_request]`,
+  `script: [npx playwright test]`, `when: [script_failure]`).
+- Commands in command position (line start, after `&&`, `||`, `;`, past
+  `VAR=value`, backslash continuations joined): `playwright test` and
+  `cypress run`, directly or via `npx`, `pnpm exec`, `yarn`, `bunx` or a
+  `node_modules/.bin` path. A package script named `e2e`, `test:e2e` or
+  `e2e:*` is read as an *inferred* E2E job.
+- GitLab: jobs (top-level keys other than the reserved ones; `.hidden` jobs
+  are templates), `script`/`before_script`, job-level `when`, a plain boolean
+  `allow_failure`, `rules` items with `if`/`when`/`allow_failure`, an
+  unconditional first rule, a single rule with a plain
+  `$CI_PIPELINE_SOURCE == "…"` test, `only:` as a list of keywords,
+  `artifacts` and `artifacts:reports:junit`, `parallel`, `retry` (scalar, or
+  `max` with `when`), `cache` blocks and `cache: []`, `default:` as "set
+  elsewhere".
+- GitHub: `on:` as a scalar, a flow list or block keys; `pull_request`
+  `types`, `branches`; `merge_group`; `schedule`; `workflow_dispatch`-only;
+  job `if: false`, `continue-on-error`, `strategy.matrix`; `jobs.<job>.steps`
+  items by their direct `run` (scalar, `|`, `>`), `uses`, `if`,
+  `continue-on-error` and `with` keys; known actions: checkout, setup-*,
+  pnpm/bun setup, cache, upload/download-artifact, the Cypress action, three
+  JUnit reporters (dorny/test-reporter, mikepenz/action-junit-report,
+  EnricoMi/publish-unit-test-result-action) and two retry actions.
+
+**Abstains (undefined, with the reason)**
+
+- Every other flow form: flow mappings `{…}`, nested flow collections,
+  commas or brackets inside quotes, aliases `*name`.
+- Inheritance and references: `extends`, merge keys `<<:`, `!reference`;
+  GitLab `include:`, `trigger:` child pipelines; GitHub reusable workflows
+  (`uses:` on a job, `workflow_call`) and local actions (`uses: ./…`);
+  third-party actions outside the known list.
+- Rule evaluation: several rules that can apply to the same pipeline source,
+  conditions other than a plain pipeline-source test (negations, `=~`,
+  `&&`, other variables), `changes`/`exists` on the deciding rule,
+  `workflow: rules`, `except:`, `only:` with `refs`/`variables`/`changes`,
+  `allow_failure` as a mapping; GitHub job or step `if:` expressions other
+  than `false`, `pull_request` `paths` filters.
+- Commands whose content is elsewhere: a local script, `bash`/`sh` of a file,
+  `make`, `just`, `task`, and package scripts for sharding (their body is not
+  read).
+- Concurrency without a shard argument (`parallel: N`, a matrix).
+- A job that repeats a key, multi-document files and cross-file `extends`.
+
 ## Layout
 
 | File / dir           | Role |

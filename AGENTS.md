@@ -220,7 +220,11 @@ documentation updates.
   names and comments are not evidence of an E2E job. A setting counts only
   when it sits in that job; otherwise it is not established (`undefined`),
   and rules report it `not_observed`, never observed. Manual-only or
-  allowed-to-fail jobs are not merge-request gates.
+  allowed-to-fail jobs are not merge-request gates. A CI behaviour is stated
+  only with structural and semantic evidence (every `true` carries
+  `ci.evidence`); an abstention is for an unsupported construct, never a
+  cover for misreading a supported one. Keep the construct lists in the
+  capability README in sync with `ci.ts`.
 - `rules.ts` implements `docs/reasoning.md`. Change them together, with tests.
 - A static audit never awards level 4 on an axis that has findings or lacks
   positive signals. `caveats` must keep stating what static analysis cannot see.

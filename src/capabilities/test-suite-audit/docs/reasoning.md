@@ -113,6 +113,16 @@ not claim a measured run time.
 
 ## CI detection
 
+**Principle.** The scanner states a CI behaviour only with structural and
+semantic evidence: the construct is where the CI system reads it (the job's
+own script or steps, the trigger keys) and means what is claimed (a test run,
+a gate, a shard). Otherwise it returns `not_observed` with a reason. An
+abstention is for a construct it does not support, never a cover for
+misreading one it does. Every `true` in `ci` carries its file, job and line
+in `ci.evidence`; every undefined setting or gate carries its reason in
+`ci.reasons` (or `e2eJobNotEstablished`). The supported and abstaining
+constructs are listed in the capability README.
+
 CI files are split into jobs by indentation (`ci.ts`; no YAML parser). A job
 runs the suite only if its *own* `script:`/`before_script:` (GitLab), or the
 direct `run` key or a `uses: cypress-io/github-action` key of an item of
