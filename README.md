@@ -227,8 +227,9 @@ through the same confined read and lists any file it refused. Its `reportPath` m
 absolute paths, `..` and a symbolic link as the final path component are
 refused, the resolved path must lie inside the project and must be the same
 file as the opened descriptor, and at most 20,000 bytes are read from disk
-(a bounded read, stated in the output). Captured test output and report
-contents are returned between delimiter lines that carry a per-call random
+(a bounded read, stated in the output). Captured test output, report
+contents and the source lines `audit_test_suite` quotes as evidence are
+returned between delimiter lines that carry a per-call random
 token, with a notice that they are data from a test run, not instructions.
 That wrapping is best-effort labelling, not a security boundary: a model can
 still be influenced by text inside the block. Returning these contents as

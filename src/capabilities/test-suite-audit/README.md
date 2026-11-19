@@ -85,6 +85,10 @@ history (`triage_flaky_test` is the capability for that).
   assertion) recognises inline `expect/should/assert` and calls to helpers
   named like assertions; a helper that asserts under another name is missed.
   Its title and severity reflect that.
+- **Excerpts are labelled as data.** Each finding's evidence list, and the
+  JSON judgment that repeats it, is returned inside `wrapUntrusted()`
+  delimiters with a per-call token, so a quoted line cannot forge the closing
+  line. This is best-effort labelling, not a security boundary.
 
 ## Layout
 

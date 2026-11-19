@@ -68,7 +68,7 @@ src/environments.ts       closed environment enum -> operator-provided base URL
 src/runners.ts            operator-provided Cypress/Playwright invocation details
 src/execution/adapter.ts  runInProject(): the only path to a live process
 src/utils/command.ts      runCommand() and sanitizeArg()
-src/utils/untrusted.ts    wrapUntrusted(): delimiters around test output and report text
+src/utils/untrusted.ts    wrapUntrusted(): delimiters around test output, report text, audit excerpts
 src/utils/confinedRead.ts openConfined(): bounded read confined to a root (O_NOFOLLOW, realpath, sameFile)
 src/capabilities/flaky-test-triage/
   schema.ts               observation in, judgment out (zod)
@@ -146,7 +146,8 @@ from environment variables and is trusted. Preserve all of the following:
 - Timeouts, output size limits, `sanitizeArg()`, the `..` traversal check, the
   `callerArg()` refusals (option-like, absolute, `..`), the `read_test_report`
   confinement (realpath inside `QA_MCP_PROJECT_DIR`, bounded read) and the
-  untrusted-data wrapping of test output and report text stay in place.
+  untrusted-data wrapping of test output, report text and audit excerpts stay
+  in place.
 
 Describe these protections as they are, and state intended guarantees as
 intentions. Current limitations to keep in mind:
@@ -157,7 +158,8 @@ intentions. Current limitations to keep in mind:
   `O_NOFOLLOW` where available, `realpath` and a device/inode comparison with
   the opened descriptor; that is not a filesystem sandbox either, and it needs
   the variable even in dry-run mode.
-- The untrusted-data delimiters around test output and report text are
+- The untrusted-data delimiters around test output, report text and audit
+  excerpts are
   best-effort labelling with a per-call token, not a security boundary.
 - Free-form caller strings are stripped of control characters and refused when
   option-like, absolute or containing `..`; they are not allowlisted.

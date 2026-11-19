@@ -144,8 +144,9 @@ which may itself be relaying untrusted content.
   comparison, which refuses rather than reads; a hard link inside the project
   to an outside file is indistinguishable by inode, so write access to the
   project directory stays trusted. This is not a filesystem sandbox.
-- **Output is labelled as data, best effort.** Captured test output and report
-  contents are returned between delimiter lines that carry a per-call random
+- **Output is labelled as data, best effort.** Captured test output, report
+  contents, and the source lines `audit_test_suite` quotes as evidence (each
+  finding's evidence list and the JSON judgment that repeats it) are returned between delimiter lines that carry a per-call random
   token, with a one-line notice (`src/utils/untrusted.ts`), so a body cannot
   forge the closing line and the model is told the block is data. This is
   labelling, not a security boundary: a textual wrapper cannot force a model

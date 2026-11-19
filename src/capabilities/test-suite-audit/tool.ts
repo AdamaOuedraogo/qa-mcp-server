@@ -2,6 +2,7 @@ import { z } from "zod";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getExecutionConfig } from "../../config.js";
+import { wrapUntrusted } from "../../utils/untrusted.js";
 import { auditTestSuite } from "./evaluator.js";
 import { scanProject, ScanRootError } from "./scanner.js";
 import { TestSuiteObservationSchema, type TestSuiteAuditJudgment, type TestSuiteObservation } from "./schema.js";
@@ -180,10 +181,10 @@ export function render(
     lines.push(`- **Impact:** ${f.impact}`);
     lines.push(`- **Recommendation:** ${f.recommendation}`);
     if (f.evidence.length) {
-      lines.push("- **Evidence:**");
-      for (const e of f.evidence) {
-        lines.push(`  - \`${e.file}${e.line ? ":" + e.line : ""}\`${e.snippet ? " — " + e.snippet : ""}`);
-      }
+      // Snippets are lines quoted from scanned files (or from a caller-supplied
+      // observation): untrusted data, delimited like report text.
+      const evidence = f.evidence.map((e) => `- ${e.file}${e.line ? ":" + e.line : ""}${e.snippet ? " — " + e.snippet : ""}`);
+      lines.push("- **Evidence:**", wrapUntrusted(`the evidence for ${f.id}, quoted from the audited files`, evidence.join("\n")));
     }
     lines.push("");
   }
@@ -204,6 +205,10 @@ export function render(
     lines.push("");
   }
   lines.push("## Caveats", "", ...j.caveats.map((c) => `- ${c}`), "");
-  lines.push("## Judgment (JSON)", "```json", JSON.stringify(j, null, 2), "```");
+  // The JSON repeats every evidence snippet, so it is wrapped as a whole.
+  lines.push(
+    "## Judgment (JSON)",
+    wrapUntrusted("the audit judgment as JSON; it quotes lines from the audited files", JSON.stringify(j, null, 2)),
+  );
   return lines.join("\n");
 }
