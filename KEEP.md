@@ -27,9 +27,11 @@ found: gh at /usr/bin/gh
 - `pnpm test` only runs the five explicit path patterns in the script; a test in a new folder is silently skipped until the script lists it · source: package.json:35 · how: read
 - every `pnpm <script>` on this machine first prints a `[WARN] The install that runs before scripts failed` line (pnpm 10 wants `pnpm approve-builds` for build scripts); the script still runs and the warning is not a failure · source: package.json:35 · how: ran
 - opening a symbolic link with `O_RDONLY | O_NOFOLLOW` on Linux fails with error code `ELOOP`, which `readReport()` maps to its final-component refusal; the test that asserts that message passes here · source: src/tools/readTestReport.test.ts:80 · how: ran
-- the audit scanner's `readCapped()` sizes its buffer to `min(size, maxBytes)` and fills it with positional reads, so it reads at most the per-file cap (issue #5) · source: src/capabilities/test-suite-audit/scanner.ts:422 · how: read
-- the existing `src/capabilities/*/tests/*.test.ts` pattern in the test script already picks up both audit test files: 20 tests in `test-suite-audit`, 5 in `test-strategy-assessment` · source: package.json:35 · how: ran
+- the audit scanner reads every file through `openConfined()` with `fill: true`, which sizes the buffer to `min(size, maxBytes)` and fills it with positional reads, so it reads at most the per-file cap (issue #5); `read_test_report` does not pass `fill` and keeps its single read · source: src/utils/confinedRead.ts:168 · how: read
+- every `*.test.ts` under `src/` is matched by one of the five patterns in the test script, including the audit, strategy and `confinedRead` test files, and the per-file counts add up to the `pnpm test` total · source: package.json:35 · how: ran
 - the audit capabilities rebased onto the boundary-hardening merge pass the full `pnpm test` suite with no test changes; the count grows with each later commit, so run the suite rather than rely on a number here · source: package.json:35 · how: ran
+- the MCP SDK drops an argument key that is not in a tool's input schema before the handler runs: a call to `audit_test_suite` with a `beforeRead` key returns a normal audit, not an error · source: src/capabilities/test-suite-audit/tests/audit.test.ts:651 · how: ran
+- the priority-tag detector accepts `@p0` to `@p3`, one level more than the P0 / P1 / P2 vocabulary · source: src/capabilities/test-suite-audit/scanner.ts:154 · how: read
 
 ## Receipts
 command: pnpm test (first run, before the test expectation was corrected; excerpt)
@@ -109,4 +111,32 @@ command: pnpm test 2>&1 | grep -E "^ℹ (tests|pass|fail|skipped)|not ok" (after
 ℹ pass 88
 ℹ fail 0
 ℹ skipped 0
+```
+command: total=0; for f in src/*.test.ts src/tools/*.test.ts src/execution/*.test.ts src/utils/*.test.ts src/capabilities/*/tests/*.test.ts; do [ -e "$f" ] || continue; n=$(node --import tsx --test "$f" 2>&1 | sed -n 's/^ℹ tests //p'); total=$((total+n)); printf "%4s  %s\n" "$n" "$f"; done; echo "sum: $total"
+```
+   5  src/runners.test.ts
+  15  src/tools/readTestReport.test.ts
+   7  src/tools/runTools.test.ts
+   7  src/execution/adapter.test.ts
+  10  src/utils/command.test.ts
+   8  src/utils/confinedRead.test.ts
+   3  src/utils/untrusted.test.ts
+  16  src/capabilities/flaky-test-triage/tests/evaluator.test.ts
+   5  src/capabilities/test-strategy-assessment/tests/assessment.test.ts
+  30  src/capabilities/test-suite-audit/tests/audit.test.ts
+   2  src/capabilities/test-suite-audit/tests/vocabulary.test.ts
+sum: 108
+```
+command: pnpm test 2>&1 | grep -E "^ℹ (tests|suites|pass|fail|skipped|todo)"
+```
+ℹ tests 108
+ℹ suites 0
+ℹ pass 108
+ℹ fail 0
+ℹ skipped 0
+ℹ todo 0
+```
+command: node --import tsx --input-type=module -e '<in-memory MCP client calls audit_test_suite with arguments { beforeRead: "x" }>' (excerpt)
+```
+isError: undefined | # Test Suite Audit /  / **Playwright suite at maturity level 3/4 (managed) — 8 finding(s), 0 critical, 4 fixable in a short PR.** /  / 1 spec file(s) / 1 test(s) analysed. Weakest axis: coverage and risk (defined). 2 high-severity issue(s) drive most of the risk. Scan completeness 40% — runner config not found (retries, reporters, traces, parallelism not judged); no CI definition found (gate, artifacts, sharding not judged); package.json not found or unparsable (scripts, dependencies not judged). /  / Audited root: QA_MCP_PROJECT_DIR
 ```
