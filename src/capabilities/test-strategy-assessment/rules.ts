@@ -33,7 +33,7 @@ const RULES: Rule[] = [
           title: "Tests are not prioritised by business risk",
           observation: `Risk-based prioritisation: ${o.strategy.riskBasedPrioritisation}.`,
           impact: "The team cannot run a fast critical subset on every change, nor explain what a red pipeline blocks. Effort goes where it is easiest, not where failure costs most.",
-          recommendation: "Run a risk workshop with product + dev: list journeys, score impact × likelihood, tag P0/P1/P2, and wire the CI gate to P0.",
+          recommendation: "Run a risk workshop with product + dev: list journeys, score impact × likelihood, tag them P0 / P1 / P2, and wire the CI gate to P0.",
           horizon: "30_days",
         })
       : undefined,
@@ -279,7 +279,7 @@ export function collectGaps(o: TestStrategyObservation): Gap[] {
 
 const QUESTIONS: Record<string, [string, string]> = {
   "strategy.documentExists": ["Is there a written test strategy? When was it last updated, and who owns it?", "It decides whether we align to something or write it."],
-  "strategy.riskBasedPrioritisation": ["How do you decide which journeys get automated first? Is there a P0/P1 list?", "Prioritisation is the base of every CI gate and coverage decision."],
+  "strategy.riskBasedPrioritisation": ["How do you decide which journeys get automated first? Is there a P0 / P1 / P2 list?", "Prioritisation is the base of every CI gate and coverage decision."],
   "strategy.testLayers.unit": ["Are unit tests systematic in the main repos? Any coverage gate?", "Tells us how much logic coverage E2E is being asked to carry."],
   "strategy.testLayers.integration_or_component": ["Are component or integration tests in place for UI logic?", "Same: where should checks live."],
   "strategy.testLayers.api_or_contract": ["Are APIs tested directly (contract or API tests) in CI?", "The fastest lever to shrink slow E2E suites."],
@@ -390,7 +390,7 @@ export function suggestServices(gaps: Gap[]): ServiceSuggestion[] {
   push({
     service: "risk_based_strategy_workshop",
     title: "Risk-based test strategy workshop",
-    outcome: "A one-page strategy, a P0/P1/P2 journey list, and a Definition of Done the squads agreed to.",
+    outcome: "A one-page strategy, a P0 / P1 / P2 journey list, and a Definition of Done the squads agreed to.",
     gapIds: has("STR-001", "STR-002", "STR-003", "STR-004", "STR-005"),
   });
   push({

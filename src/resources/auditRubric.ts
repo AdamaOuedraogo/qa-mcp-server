@@ -26,8 +26,9 @@ trend. Treat 3 as the realistic ceiling of a code-only review.
 - **Maintainability** — user-facing locators, a thin abstraction layer, no
   hard-coded URLs, typed and linted test code, small specs.
 - **Feedback speed** — parallel-safe tests, sharded CI job, cached
-  dependencies/browsers, critical subset on merge requests.
-- **Coverage & risk** — journeys tagged by priority, no committed \`.only\`,
+  dependencies/browsers, P0 subset on merge requests.
+- **Coverage & risk** — journeys tagged by priority (P0 / P1 / P2, written
+  \`@p0\` / \`@p1\` / \`@p2\` in test titles), no committed \`.only\`,
   skips triaged, every test asserts, CI gate on merge requests + nightly full run.
 - **Observability** — JSON/JUnit reporters, traces/screenshots on failure,
   artifacts published, JUnit wired to the CI test tab.

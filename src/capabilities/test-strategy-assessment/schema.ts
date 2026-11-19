@@ -29,7 +29,7 @@ export const TestStrategyObservationSchema = z.object({
 
   strategy: z.object({
     documentExists: tri(["no", "outdated", "living"]).describe("Is there a written test strategy, and is it maintained?"),
-    riskBasedPrioritisation: tri(["no", "informal", "explicit"]).describe("Are tests/journeys classified by business risk (P0/P1/P2)?"),
+    riskBasedPrioritisation: tri(["no", "informal", "explicit"]).describe("Are tests/journeys classified by business risk (P0 / P1 / P2)?"),
     testLayers: z.object({
       unit: LayerPresenceSchema,
       integration_or_component: LayerPresenceSchema,

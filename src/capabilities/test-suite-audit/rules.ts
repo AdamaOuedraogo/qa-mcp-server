@@ -403,7 +403,7 @@ const noPrioritisation: Rule = (obs) => {
     impact:
       "Without priorities the suite is all-or-nothing: the team cannot run a fast critical subset on every merge request and a full run nightly, and cannot say what a red pipeline actually blocks.",
     recommendation:
-      "Classify journeys by business risk (P0 = revenue/compliance/auth, P1, P2), tag the tests, and wire the CI gate to the P0 subset. This is the foundation of a risk-based strategy.",
+      "Classify journeys by business risk as P0 / P1 / P2 (P0: revenue, compliance and auth journeys), tag the tests @p0 / @p1 / @p2, and wire the CI gate to the P0 subset. This is the foundation of a risk-based strategy.",
     effort: "M",
     quickWin: false,
     basis: "observed",
