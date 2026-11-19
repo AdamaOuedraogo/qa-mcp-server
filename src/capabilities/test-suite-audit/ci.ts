@@ -671,13 +671,47 @@ function parseGithub(path: string, src: string): ParsedFile {
   const lines = stripYamlComments(src).split(/\r?\n/);
   const top = blocksAt(lines, 0);
   const on = top.find((b) => ["on", "true"].includes(b.key));
-  const onText = on ? textOf(on) : "";
+  // Triggers are the keys of on: (a scalar, a flow sequence or a block
+  // mapping); words inside a trigger's options are not triggers.
   const triggers = new Set<string>();
-  for (const m of onText.matchAll(/\b(pull_request_target|pull_request|push|schedule|workflow_dispatch|workflow_call|repository_dispatch|merge_group|release)\b/g)) {
-    triggers.add(m[1]!);
+  const triggerBlocks = new Map<string, Block>();
+  let triggersWhy: string | undefined = on ? undefined : "the workflow has no on: key";
+  if (on) {
+    const inl = readInline(on.inline);
+    if (inl.kind === "scalar") triggers.add(inl.value);
+    else if (inl.kind === "seq") inl.items.forEach((t) => triggers.add(t));
+    else if (inl.kind === "unsupported") triggersWhy = `on: uses an unsupported form (${inl.why})`;
+    else {
+      const ind = childIndent(on.body);
+      for (const t of ind === undefined ? [] : blocksAt(on.body, ind)) {
+        triggers.add(t.key);
+        triggerBlocks.set(t.key, t);
+      }
+    }
   }
-  const prTrigger = triggers.has("pull_request") || triggers.has("pull_request_target") || triggers.has("merge_group");
-  const manualFile = triggers.size > 0 && [...triggers].every((t) => t === "workflow_dispatch");
+  const triggersRead = triggersWhy === undefined;
+  // A pull_request trigger gates merges unless its types exclude the events a
+  // PR update raises; a paths filter makes it conditional.
+  let prGate: boolean | undefined = false;
+  let prWhy: string | undefined;
+  for (const name of ["pull_request", "pull_request_target"]) {
+    if (!triggers.has(name)) continue;
+    const tb = triggerBlocks.get(name);
+    const types = tb ? child(tb, "types") : undefined;
+    const typesSeq = seqOf(types);
+    if (tb && (child(tb, "paths") || child(tb, "paths-ignore"))) {
+      prGate = undefined;
+      prWhy = `${name} has a paths filter, so it runs only for some changes`;
+    } else if ("unsupported" in typesSeq) {
+      prGate = undefined;
+      prWhy = `${name}.types uses an unsupported form`;
+    } else if (types && !typesSeq.items.some((i) => ["opened", "synchronize", "reopened"].includes(i.scalar ?? ""))) {
+      // runs on other PR events only (closed, labeled…): not a gate
+    } else if (prGate === false) prGate = true;
+  }
+  if (triggers.has("merge_group")) prGate = true;
+  const prTrigger = prGate;
+  const manualFile = triggersRead && triggers.size > 0 && [...triggers].every((t) => t === "workflow_dispatch");
   const calledElsewhere = triggers.has("workflow_call");
 
   const jobsBlock = top.find((b) => b.key === "jobs");
@@ -710,8 +744,20 @@ function parseGithub(path: string, src: string): ParsedFile {
       let scheduled: boolean | undefined;
       if (manualOnly || continueOnError || stepContinue) mergeRequestGate = false;
       else if (stepIf) why.mergeRequestGate = why.scheduled = "the E2E step has its own if:";
-      else if (!jobIf && !calledElsewhere && on) mergeRequestGate = prTrigger ? true : undefined;
-      if (!stepIf && !jobIf && !calledElsewhere && on) scheduled = triggers.has("schedule");
+      else if (!triggersRead) why.mergeRequestGate = triggersWhy;
+      else if (jobIf) why.mergeRequestGate = "the job has its own if:";
+      else if (calledElsewhere) why.mergeRequestGate = "the workflow is reusable (workflow_call); its callers decide";
+      else if (prTrigger === undefined) why.mergeRequestGate = prWhy;
+      else if (prTrigger) mergeRequestGate = true;
+      else if (triggers.has("pull_request") || triggers.has("pull_request_target")) mergeRequestGate = false;
+      else why.mergeRequestGate = "the workflow has no pull_request trigger; whether its checks gate merges is set outside the file";
+
+      if (stepIf) {
+        // reason already set above
+      } else if (!triggersRead) why.scheduled = triggersWhy;
+      else if (jobIf) why.scheduled = "the job has its own if:";
+      else if (calledElsewhere) why.scheduled = "the workflow is reusable (workflow_call); its callers decide";
+      else scheduled = triggers.has("schedule");
 
       // A setting carried by steps is false only when every step was read.
       const unknownAction = steps.find((st) => st.uses !== undefined && !st.uses.startsWith("./") && !KNOWN_ACTIONS.test(st.uses));
@@ -746,8 +792,12 @@ function parseGithub(path: string, src: string): ParsedFile {
       const at: Job["at"] = {
         command: commandSteps[0]?.runLine ?? commandSteps[0]?.usesLine,
         // A GitHub gate is set by the workflow trigger, so its evidence is the trigger line in on:.
-        mergeRequestGate: mergeRequestGate ? firstLine(lines, onRange, /\b(pull_request|pull_request_target|merge_group)\b/) : undefined,
-        scheduled: scheduled ? firstLine(lines, onRange, /\bschedule\b/) : undefined,
+        mergeRequestGate: mergeRequestGate
+          ? firstLine(lines, onRange, { test: (l) => /^\s*(on|"on"|'on')\s*:\s*\S/.test(l) ? /\b(pull_request|pull_request_target|merge_group)\b/.test(l) : /^\s*(pull_request|pull_request_target|merge_group)\s*:/.test(l) })
+          : undefined,
+        scheduled: scheduled
+          ? firstLine(lines, onRange, { test: (l) => /^\s*(on|"on"|'on')\s*:\s*\S/.test(l) ? /\bschedule\b/.test(l) : /^\s*schedule\s*:/.test(l) })
+          : undefined,
         artifacts: art?.usesLine,
         junit: junit?.usesLine,
         retry: retry?.usesLine,

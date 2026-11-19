@@ -178,6 +178,14 @@ A job that uses `extends`, a merge key, `!reference` or an alias, or whose
 `rules`/`when` use an unsupported form, has an unknown enabled state: it does
 not establish an E2E job, and the reason names the construct.
 
+GitHub triggers are the keys of `on:` (a scalar, a flow sequence or a block
+mapping; a flow mapping abstains); words inside a trigger's options are not
+triggers. `pull_request` gates merges unless its `types` exclude `opened`,
+`synchronize` and `reopened` (then `false`); a `paths`/`paths-ignore` filter
+leaves the gate undefined; `merge_group` gates. The schedule is `false` only
+when `on:` was fully read and has no `schedule` key. A job or step with its
+own `if:`, or a reusable workflow (`workflow_call`), leaves both undefined.
+
 Gates: a disabled job (`when: never`, `if: false`, a hidden `.template`) is
 not an E2E job. A manual-only job (`when: manual`, a GitHub workflow with only
 `workflow_dispatch`) or one allowed to fail (`allow_failure`,

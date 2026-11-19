@@ -410,3 +410,58 @@ test("settings supported: shard arguments, Cypress parallel, reports:junit, retr
   assert.equal(cyCli.ci.parallelOrSharded, true);
   assertTrueValuesHaveEvidence(cyCli);
 });
+
+// --- GitHub triggers: keys of on:, not words ----------------------------------
+
+test("triggers: words inside trigger options are not triggers; flow mappings abstain", () => {
+  const words = github(`on:\n  workflow_dispatch:\n    inputs:\n      why:\n        description: "run like the schedule, for pull_request checks"\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(words.ci.scheduledRun, false, "on: was fully read and has no schedule key");
+  assert.equal(words.ci.runsOnMergeRequest, false, "workflow_dispatch only: manual");
+  assert.equal(words.ci.e2eJobs?.[0]?.manualOnly, true);
+
+  const flow = github(`on: {pull_request: {branches: [main]}}\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(flow.ci.runsOnMergeRequest, undefined);
+  assert.equal(flow.ci.scheduledRun, undefined, "false needs on: fully read");
+  assert.match(flow.ci.reasons?.runsOnMergeRequest ?? "", /on: uses an unsupported form/);
+  assertTrueValuesHaveEvidence(flow);
+});
+
+test("triggers: pull_request types without PR-update events is not a gate; a paths filter abstains", () => {
+  const closed = github(`on:\n  pull_request:\n    types: [closed]\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(closed.ci.runsOnMergeRequest, false);
+
+  const labeled = github(`on:\n  pull_request:\n    types:\n      - labeled\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(labeled.ci.runsOnMergeRequest, false);
+
+  const paths = github(`on:\n  pull_request:\n    paths: ["docs/**"]\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(paths.ci.runsOnMergeRequest, undefined);
+  assert.match(paths.ci.reasons?.runsOnMergeRequest ?? "", /paths filter/);
+});
+
+test("triggers supported: scalar, flow list and block keys, types with synchronize, branches, merge_group, schedule", () => {
+  const scalar = github(`on: pull_request\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(scalar.ci.runsOnMergeRequest, true);
+  assertTrueValuesHaveEvidence(scalar);
+
+  const list = github(`on: [push, pull_request]\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(list.ci.runsOnMergeRequest, true);
+  assert.equal(list.ci.scheduledRun, false);
+  assertTrueValuesHaveEvidence(list);
+
+  const block = github(
+    `on:\n  pull_request:\n    branches: [main]\n    types: [opened, synchronize]\n  schedule:\n    - cron: "0 2 * * *"\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`,
+  );
+  assert.equal(block.ci.runsOnMergeRequest, true);
+  assert.equal(block.ci.scheduledRun, true);
+  assert.deepEqual(block.ci.evidence?.runsOnMergeRequest, { file: GH, job: "e2e", line: 2 });
+  assert.deepEqual(block.ci.evidence?.scheduledRun, { file: GH, job: "e2e", line: 5 });
+  assertTrueValuesHaveEvidence(block);
+
+  const mq = github(`on:\n  merge_group:\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(mq.ci.runsOnMergeRequest, true);
+  assertTrueValuesHaveEvidence(mq);
+
+  const push = github(`on:\n  push:\n    branches: [main]\njobs:\n  e2e:\n    steps:\n      - run: npx playwright test\n`);
+  assert.equal(push.ci.runsOnMergeRequest, undefined);
+  assert.match(push.ci.reasons?.runsOnMergeRequest ?? "", /no pull_request trigger/);
+});
